@@ -1,0 +1,4 @@
+preload = ["./ws-override.ts"]
+
+[install]
+peer = false
