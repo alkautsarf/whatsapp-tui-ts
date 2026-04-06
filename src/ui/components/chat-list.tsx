@@ -66,7 +66,6 @@ export function ChatList(props: { queries: StoreQueries; scrollRef?: (el: any) =
               const time = () => formatTime(chat.last_msg_ts);
               const unread = () => chat.unread ?? 0;
               const isPinned = () => (chat.pinned ?? 0) > 0;
-              const isMuted = () => (chat.muted_until ?? 0) > 0;
 
               const preview = () => {
                 const text = chat.last_msg_text;

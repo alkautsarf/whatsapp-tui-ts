@@ -1,4 +1,4 @@
-import { Switch, Match } from "solid-js";
+import { Switch, Match, createEffect } from "solid-js";
 import { useTerminalDimensions } from "@opentui/solid";
 import { useAppStore } from "./state.tsx";
 import { useTheme } from "./theme.tsx";
@@ -19,13 +19,38 @@ export function App(props: {
 
   let messagesScrollRef: any;
   let chatListScrollRef: any;
+  const subscribedPresence = new Set<string>();
+  createEffect(() => {
+    if (store.connection.status === "connected") subscribedPresence.clear();
+  });
 
   useAppKeyboard({
     onQuit: props.onQuit,
 
     onSelectChat() {
       const jid = store.highlightedChatJid;
-      if (jid) helpers.selectChat(jid);
+      if (!jid) return;
+      helpers.selectChat(jid);
+      const sock = props.getSock();
+      if (!sock) return;
+      // Mark messages as read on WhatsApp's server
+      const msgs = store.messages[jid];
+      if (msgs && msgs.length > 0) {
+        const keys = msgs
+          .filter((m) => m.from_me === 0 && m.status < 4)
+          .slice(0, 20)
+          .map((m) => ({
+            remoteJid: jid,
+            id: m.id,
+            participant: jid.endsWith("@g.us") ? (m.sender_jid ?? undefined) : undefined,
+          }));
+        if (keys.length > 0) sock.readMessages(keys).catch(() => {});
+      }
+      // Subscribe to typing notifications
+      if (!subscribedPresence.has(jid)) {
+        subscribedPresence.add(jid);
+        sock.presenceSubscribe(jid).catch(() => {});
+      }
     },
 
     onNavigateChatList(dir) {
@@ -63,12 +88,15 @@ export function App(props: {
     onJumpMessages(pos) {
       const jid = store.selectedChatJid;
       if (!jid) return;
-      const msgs = store.messages[jid];
-      if (!msgs || msgs.length === 0) return;
       if (pos === "first") {
+        helpers.loadMoreMessages(jid);
+        const msgs = store.messages[jid];
+        if (!msgs || msgs.length === 0) return;
         helpers.setSelectedMessageIndex(msgs.length - 1);
         if (messagesScrollRef) messagesScrollRef.scrollTop = 0;
       } else {
+        const msgs = store.messages[jid];
+        if (!msgs || msgs.length === 0) return;
         helpers.setSelectedMessageIndex(0);
         if (messagesScrollRef) messagesScrollRef.scrollTop = messagesScrollRef.scrollHeight;
       }
@@ -82,6 +110,17 @@ export function App(props: {
       const maxIdx = msgs.length - 1;
       const newIdx = Math.max(0, Math.min(maxIdx, store.selectedMessageIndex - dir));
       helpers.setSelectedMessageIndex(newIdx);
+      // Load older messages when reaching the top
+      if (newIdx === maxIdx && dir === -1) {
+        const prevLen = msgs.length;
+        helpers.loadMoreMessages(jid);
+        const updated = store.messages[jid];
+        if (updated && updated.length > prevLen) {
+          helpers.setSelectedMessageIndex(updated.length - 1);
+          if (messagesScrollRef) messagesScrollRef.scrollTop = 0;
+          return;
+        }
+      }
       const targetMsg = msgs[newIdx];
       const newlines = targetMsg?.text ? (targetMsg.text.match(/\n/g)?.length ?? 0) : 0;
       messagesScrollRef?.scrollBy(dir * (newlines + 2));
@@ -96,6 +135,7 @@ export function App(props: {
       const step = 10;
       const newIdx = Math.max(0, Math.min(maxIdx, store.selectedMessageIndex - dir * step));
       helpers.setSelectedMessageIndex(newIdx);
+      if (newIdx >= maxIdx - 5 && dir < 0) helpers.loadMoreMessages(jid);
       messagesScrollRef?.scrollBy(dir, "viewport");
     },
 

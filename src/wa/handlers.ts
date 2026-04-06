@@ -206,6 +206,16 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
     }
   });
 
+  // Presence (typing indicators)
+  sock.ev.on("presence.update", (json) => {
+    const { id, presences } = json;
+    if (!id || !presences || !bridge) return;
+    const isTyping = Object.values(presences).some(
+      (p: any) => p.lastKnownPresence === "composing"
+    );
+    bridge.onPresenceUpdate(id, isTyping);
+  });
+
   // Groups
   sock.ev.on("groups.upsert", (groups) => {
     for (const g of groups) {

@@ -1,5 +1,5 @@
 import { Show, createMemo } from "solid-js";
-import { useTheme } from "../theme.tsx";
+import { useTheme, type Theme } from "../theme.tsx";
 import type { MessageRow } from "../../store/queries.ts";
 
 function senderColorFromName(name: string, colors: string[]): string {
@@ -15,14 +15,13 @@ function formatTime(ts: number): string {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-function receiptStr(status: number): string {
+function receiptStyle(status: number, t: Theme): { glyph: string; color: string } {
   switch (status) {
-    case 0: return " \u00b7";
-    case 1: return " \u2713";
-    case 2: return " \u2713";
-    case 3: return " \u2713\u2713";
-    case 4: return " \u2713\u2713";
-    default: return "";
+    case 0: return { glyph: " \u00b7", color: t.textMuted };
+    case 1: case 2: return { glyph: " \u2713", color: t.sent };
+    case 3: return { glyph: " \u2713\u2713", color: t.delivered };
+    case 4: return { glyph: " \u2713\u2713", color: t.read };
+    default: return { glyph: "", color: t.textMuted };
   }
 }
 
@@ -81,26 +80,20 @@ export function MessageBubble(props: BubbleProps) {
     return "";
   };
 
-  // Build body text (quote + content + time) as single string
-  const bodyText = createMemo(() => {
+  const contentText = createMemo(() => {
     const lines: string[] = [];
     if (props.quotedText) {
       lines.push("> " + props.quotedText.slice(0, 50));
     }
     const content = msgContent();
-    const timeStr = formatTime(props.message.timestamp) + (isOwn() ? receiptStr(props.message.status) : "");
-    // Multi-line content: timestamp on its own line; single-line: inline
-    if (content.includes("\n")) {
-      lines.push(content);
-      lines.push(timeStr);
-    } else {
-      lines.push(content + "  " + timeStr);
-    }
+    if (content) lines.push(content);
     return lines.join("\n");
   });
 
-  // Explicit line count for Yoga height — OpenTUI doesn't auto-size from \n count
-  const bodyLineCount = createMemo(() => bodyText().split("\n").length);
+  const contentLineCount = createMemo(() => {
+    const t = contentText();
+    return t ? t.split("\n").length : 0;
+  });
 
   const nameColor = () => senderColorFromName(props.senderName, theme.senderColors);
 
@@ -134,9 +127,16 @@ export function MessageBubble(props: BubbleProps) {
               <text fg={nameColor()}>{props.senderName}</text>
             </box>
           </Show>
-          {/* Body: quote + content + time — explicit height for OpenTUI */}
-          <box height={bodyLineCount()}>
-            <text fg={theme.text}>{bodyText()}</text>
+          <Show when={contentLineCount() > 0}>
+            <box height={contentLineCount()}>
+              <text fg={theme.text}>{contentText()}</text>
+            </box>
+          </Show>
+          <box height={1} flexDirection="row" justifyContent="flex-end" gap={1}>
+            <text fg={theme.textMuted}>{formatTime(props.message.timestamp)}</text>
+            <Show when={isOwn()}>
+              {(() => { const r = receiptStyle(props.message.status, theme); return <text fg={r.color}>{r.glyph}</text>; })()}
+            </Show>
           </box>
         </box>
         <Show when={props.isSelected && !isOwn()}>

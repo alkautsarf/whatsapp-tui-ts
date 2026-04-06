@@ -32,4 +32,5 @@ export interface AppStore {
   focusZone: FocusZone;
   overlay: OverlayState | null;
   replyToMessageId: string | null;
+  typingJids: Record<string, number>;
 }

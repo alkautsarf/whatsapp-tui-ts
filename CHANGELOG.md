@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2] - 2026-04-06
+
+### Added
+
+- Read receipt colors: gray `·` pending, gray `✓` sent, lighter gray `✓✓` delivered, blue `✓✓` read
+- Typing indicators: "typing..." shown in chat header when contact is composing (6s auto-expiry)
+- Scroll-to-top pagination: `gg` and `k` at boundary load older messages from SQLite
+- Mark-as-read: `sock.readMessages()` called on chat open to clear unread on sender's side
+- Presence subscription per chat for typing notifications
+- Dynamic connection status in chat header (connected/reconnecting/disconnected with color)
+- Auto-highlight first chat on startup
+
+### Changed
+
+- Receipt timestamp and glyph rendered as separate row for per-status coloring
+- Pagination guard: skips DB query for chats with no more messages to load
+- Presence subscriptions cleared on reconnect to re-subscribe with new socket
+
 ## [0.2.1] - 2026-04-06
 
 ### Added
@@ -72,6 +90,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.2.2]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.2.2
 [0.2.1]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.2.1
 [0.2.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.2.0
 [0.1.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.1.0

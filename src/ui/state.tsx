@@ -19,6 +19,7 @@ export interface ReactiveBridge {
   onChatUpdate(chat: ChatRow): void;
   onContactUpdate(contact: ContactRow): void;
   onStatusUpdate(msgId: string, status: number): void;
+  onPresenceUpdate(chatJid: string, isTyping: boolean): void;
 }
 
 // ── Store helpers ───────────────────────────────────────────────────
@@ -51,6 +52,7 @@ const INITIAL_STORE: AppStore = {
   focusZone: "chat-list",
   overlay: null,
   replyToMessageId: null,
+  typingJids: {},
 };
 
 export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFunction<AppStore>, AppStoreHelpers] {
@@ -60,7 +62,10 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
     const chats = queries.listChats(500);
     setStore("chats", chats);
 
-    // If a chat is selected, refresh its messages too
+    if (!store.highlightedChatJid && chats.length > 0) {
+      setStore("highlightedChatJid", chats[0]!.jid);
+    }
+
     if (store.selectedChatJid) {
       const msgs = queries.getMessages(store.selectedChatJid, 50);
       setStore("messages", store.selectedChatJid, msgs);
@@ -83,14 +88,18 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
     setStore("chats", (c) => c.jid === jid, "unread", 0);
   }
 
+  const exhaustedChats = new Set<string>();
+
   function loadMoreMessages(jid: string) {
+    if (exhaustedChats.has(jid)) return;
     const existing = store.messages[jid];
     if (!existing || existing.length === 0) return;
-    // Messages are stored newest-first, so the oldest has the smallest timestamp
     const oldestTs = existing[existing.length - 1]!.timestamp;
     const older = queries.getMessages(jid, 30, oldestTs);
     if (older.length > 0) {
       setStore("messages", jid, (prev) => [...(prev || []), ...older]);
+    } else {
+      exhaustedChats.add(jid);
     }
   }
 
@@ -157,6 +166,10 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
             "status",
             status
           );
+        },
+
+        onPresenceUpdate(chatJid, isTyping) {
+          setStore("typingJids", chatJid, isTyping ? Math.floor(Date.now() / 1000) : 0);
         },
       };
     },
