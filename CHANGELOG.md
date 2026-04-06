@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.3] - 2026-04-06
+
+### Changed
+
+- Chat header shows contact online status (`● online`) instead of connection state
+- Presence updates skip no-op store writes when value is unchanged
+- Typing indicator interval only ticks when someone is actively typing
+
 ## [0.2.2] - 2026-04-06
 
 ### Added
@@ -90,6 +98,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.2.3]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.2.3
 [0.2.2]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.2.2
 [0.2.1]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.2.1
 [0.2.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.2.0

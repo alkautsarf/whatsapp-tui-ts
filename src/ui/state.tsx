@@ -19,7 +19,7 @@ export interface ReactiveBridge {
   onChatUpdate(chat: ChatRow): void;
   onContactUpdate(contact: ContactRow): void;
   onStatusUpdate(msgId: string, status: number): void;
-  onPresenceUpdate(chatJid: string, isTyping: boolean): void;
+  onPresenceUpdate(chatJid: string, isTyping: boolean, presence?: string): void;
 }
 
 // ── Store helpers ───────────────────────────────────────────────────
@@ -53,6 +53,7 @@ const INITIAL_STORE: AppStore = {
   overlay: null,
   replyToMessageId: null,
   typingJids: {},
+  presenceMap: {},
 };
 
 export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFunction<AppStore>, AppStoreHelpers] {
@@ -168,8 +169,15 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
           );
         },
 
-        onPresenceUpdate(chatJid, isTyping) {
-          setStore("typingJids", chatJid, isTyping ? Math.floor(Date.now() / 1000) : 0);
+        onPresenceUpdate(chatJid, isTyping, presence) {
+          if (isTyping) {
+            setStore("typingJids", chatJid, Math.floor(Date.now() / 1000));
+          } else if (store.typingJids[chatJid]) {
+            setStore("typingJids", chatJid, 0);
+          }
+          if (presence && store.presenceMap[chatJid] !== presence) {
+            setStore("presenceMap", chatJid, presence);
+          }
         },
       };
     },

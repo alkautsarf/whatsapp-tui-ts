@@ -33,4 +33,5 @@ export interface AppStore {
   overlay: OverlayState | null;
   replyToMessageId: string | null;
   typingJids: Record<string, number>;
+  presenceMap: Record<string, string>;
 }

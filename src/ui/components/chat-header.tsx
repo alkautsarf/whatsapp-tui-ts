@@ -29,7 +29,10 @@ export function ChatHeader(props: { queries: StoreQueries }) {
 
   // Typing indicator — tick every 2s to expire stale entries
   const [now, setNow] = createSignal(Math.floor(Date.now() / 1000));
-  const tick = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 2000);
+  const tick = setInterval(() => {
+    const jid = store.selectedChatJid;
+    if (jid && store.typingJids[jid]) setNow(Math.floor(Date.now() / 1000));
+  }, 2000);
   onCleanup(() => clearInterval(tick));
 
   const isTyping = createMemo(() => {
@@ -55,11 +58,9 @@ export function ChatHeader(props: { queries: StoreQueries }) {
           <text fg={theme.textStrong} attributes={1}>
             {name()}
           </text>
-          <text fg={store.connection.status === "connected" ? theme.online
-            : store.connection.status === "reconnecting" ? theme.warning
-            : theme.error}>
-            {"\u25cf " + store.connection.status}
-          </text>
+          <Show when={store.presenceMap[store.selectedChatJid!] === "available"}>
+            <text fg={theme.online}>{"\u25cf online"}</text>
+          </Show>
         </box>
         <Show when={isTyping()} fallback={<text fg={theme.textMuted}>{subtitle()}</text>}>
           <text fg={theme.success}>{"typing..."}</text>

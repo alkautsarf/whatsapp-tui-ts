@@ -206,14 +206,15 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
     }
   });
 
-  // Presence (typing indicators)
+  // Presence (typing + online status)
   sock.ev.on("presence.update", (json) => {
     const { id, presences } = json;
     if (!id || !presences || !bridge) return;
-    const isTyping = Object.values(presences).some(
-      (p: any) => p.lastKnownPresence === "composing"
-    );
-    bridge.onPresenceUpdate(id, isTyping);
+    const entries = Object.values(presences) as any[];
+    const isTyping = entries.some((p) => p.lastKnownPresence === "composing");
+    // For DMs, use the single participant's presence; for groups, prefer "composing" > "available"
+    const presence = entries[0]?.lastKnownPresence as string | undefined;
+    bridge.onPresenceUpdate(id, isTyping, presence);
   });
 
   // Groups
