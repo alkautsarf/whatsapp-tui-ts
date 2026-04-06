@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.1] - 2026-04-06
+
+### Added
+
+- Message cursor with `▸`/`◂` selection indicators and `isSelected` background highlight
+- `gg`/`G` keybindings to jump to top/bottom in both chat list and messages
+- Last message preview in chat list (replaces empty/generic "(group)" text)
+- Chat list viewport scrolling with vim-like edge padding on j/k navigation
+- Scroll-to-bottom on message send and reply
+
+### Fixed
+
+- Reply not sending as quote (quoted object was in content arg instead of options arg)
+- Message bubbles collapsing with no spacing between them
+- Long message bubbles overflowing background (explicit Yoga height from line count)
+- Timestamp rendering outside bubble on short messages (inline for single-line, own line for multi-line)
+- Chat list timestamps showing stale values (SQL now uses actual latest message timestamp)
+- Cursor style: block instead of line, non-blinking across input, search, and command palette
+- Reply state carrying over when switching chats
+- Chat list not reordering in real-time (direct store update bypasses stale WAL reader)
+- Tab cycling to input/messages zone when no chat is selected
+- `G` (Shift+g) key conflict with `gg` sequence handler
+
+### Changed
+
+- Chat list selection indicator uses full-height background color instead of single-line text character
+- Message scroll estimates line count from content to keep cursor in viewport
+- Removed `viewportCulling` from messages scrollbox for correct `scrollHeight` calculation
+
 ## [0.2.0] - 2026-04-06
 
 ### Added
@@ -43,5 +72,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.2.1]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.2.1
 [0.2.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.2.0
 [0.1.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.1.0

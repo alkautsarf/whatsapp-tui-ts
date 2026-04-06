@@ -91,6 +91,7 @@ export function SearchOverlay(props: { queries: StoreQueries }) {
           placeholder="Search chats..."
           textColor={theme.text}
           focused
+          cursorStyle={{ style: "block", blinking: false }}
           onInput={(v: string) => { setQuery(v); setSelectedIdx(0); }}
           onKeyDown={handleKeyDown}
         />

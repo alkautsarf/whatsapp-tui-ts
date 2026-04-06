@@ -61,12 +61,16 @@ export interface BubbleProps {
   showDate: boolean;
   senderName: string;
   quotedText?: string | null;
+  isSelected?: boolean;
 }
 
 export function MessageBubble(props: BubbleProps) {
   const theme = useTheme();
   const isOwn = () => props.message.from_me === 1;
-  const bubbleBg = () => isOwn() ? theme.bgBubbleOwn : theme.bgBubbleOther;
+  const bubbleBg = () => {
+    if (props.isSelected) return theme.bgMessageSelected;
+    return isOwn() ? theme.bgBubbleOwn : theme.bgBubbleOther;
+  };
 
   const msgContent = () => {
     if (props.message.text) return props.message.text;
@@ -83,16 +87,25 @@ export function MessageBubble(props: BubbleProps) {
     if (props.quotedText) {
       lines.push("> " + props.quotedText.slice(0, 50));
     }
-    lines.push(msgContent());
-    const timeLine = formatTime(props.message.timestamp) + (isOwn() ? receiptStr(props.message.status) : "");
-    lines.push(timeLine);
+    const content = msgContent();
+    const timeStr = formatTime(props.message.timestamp) + (isOwn() ? receiptStr(props.message.status) : "");
+    // Multi-line content: timestamp on its own line; single-line: inline
+    if (content.includes("\n")) {
+      lines.push(content);
+      lines.push(timeStr);
+    } else {
+      lines.push(content + "  " + timeStr);
+    }
     return lines.join("\n");
   });
+
+  // Explicit line count for Yoga height — OpenTUI doesn't auto-size from \n count
+  const bodyLineCount = createMemo(() => bodyText().split("\n").length);
 
   const nameColor = () => senderColorFromName(props.senderName, theme.senderColors);
 
   return (
-    <box flexDirection="column">
+    <box flexDirection="column" marginBottom={1}>
       {/* Date separator */}
       <Show when={props.showDate}>
         <box justifyContent="center" alignItems="center" width="100%" paddingY={1}>
@@ -103,7 +116,12 @@ export function MessageBubble(props: BubbleProps) {
       </Show>
 
       {/* Message bubble */}
-      <box alignItems={isOwn() ? "flex-end" : "flex-start"}>
+      <box flexDirection="row" alignItems="flex-start" justifyContent={isOwn() ? "flex-end" : "flex-start"}>
+        <Show when={props.isSelected && isOwn()}>
+          <box width={2}>
+            <text fg={theme.borderAccent}>{"\u25b8"}</text>
+          </box>
+        </Show>
         <box
           flexDirection="column"
           backgroundColor={bubbleBg()}
@@ -116,9 +134,16 @@ export function MessageBubble(props: BubbleProps) {
               <text fg={nameColor()}>{props.senderName}</text>
             </box>
           </Show>
-          {/* Body: quote + content + time as single text */}
-          <text fg={theme.text}>{bodyText()}</text>
+          {/* Body: quote + content + time — explicit height for OpenTUI */}
+          <box height={bodyLineCount()}>
+            <text fg={theme.text}>{bodyText()}</text>
+          </box>
         </box>
+        <Show when={props.isSelected && !isOwn()}>
+          <box width={2}>
+            <text fg={theme.borderAccent}>{"\u25c2"}</text>
+          </box>
+        </Show>
       </box>
     </box>
   );

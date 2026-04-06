@@ -21,6 +21,7 @@ export interface ChatRow {
   muted_until?: number;
   is_group?: number;
   lid_jid?: string | null;
+  last_msg_text?: string | null;
 }
 
 export interface MessageRow {
@@ -132,14 +133,22 @@ export function initQueries(db: DbInstances): StoreQueries {
   // ── Read statements ───────────────────────────────────────────
 
   const listChatsStmt = reader.prepare<ChatRow, [number]>(`
-    SELECT jid, name, last_msg_ts, unread, pinned, archived, muted_until, is_group, lid_jid
-    FROM chats
-    WHERE archived = 0
-      AND jid != 'status@broadcast'
-      AND NOT (jid LIKE '%@lid' AND EXISTS (
-        SELECT 1 FROM chats c2 WHERE c2.lid_jid = chats.jid AND c2.jid NOT LIKE '%@lid'
+    SELECT c.jid, c.name,
+      COALESCE(
+        (SELECT MAX(m.timestamp) FROM messages m WHERE m.chat_jid = c.jid OR m.chat_jid = c.lid_jid),
+        c.last_msg_ts
+      ) as last_msg_ts,
+      c.unread, c.pinned, c.archived, c.muted_until, c.is_group, c.lid_jid,
+      (SELECT m.text FROM messages m
+       WHERE m.chat_jid = c.jid OR m.chat_jid = c.lid_jid
+       ORDER BY m.timestamp DESC LIMIT 1) as last_msg_text
+    FROM chats c
+    WHERE c.archived = 0
+      AND c.jid != 'status@broadcast'
+      AND NOT (c.jid LIKE '%@lid' AND EXISTS (
+        SELECT 1 FROM chats c2 WHERE c2.lid_jid = c.jid AND c2.jid NOT LIKE '%@lid'
       ))
-    ORDER BY pinned DESC, last_msg_ts DESC
+    ORDER BY c.pinned DESC, last_msg_ts DESC
     LIMIT ?1
   `);
 

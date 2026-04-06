@@ -28,7 +28,7 @@ function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + "\u2026" : s;
 }
 
-export function ChatList(props: { queries: StoreQueries }) {
+export function ChatList(props: { queries: StoreQueries; scrollRef?: (el: any) => void }) {
   const { store, helpers } = useAppStore();
   const theme = useTheme();
 
@@ -53,6 +53,7 @@ export function ChatList(props: { queries: StoreQueries }) {
         }
       >
         <scrollbox
+          ref={props.scrollRef}
           flexGrow={1}
           stickyScroll={false}
           viewportCulling
@@ -67,45 +68,49 @@ export function ChatList(props: { queries: StoreQueries }) {
               const isPinned = () => (chat.pinned ?? 0) > 0;
               const isMuted = () => (chat.muted_until ?? 0) > 0;
 
+              const preview = () => {
+                const text = chat.last_msg_text;
+                if (text) return truncate(text.replace(/\n/g, " "), 30);
+                if (chat.is_group) return "(group)";
+                return "";
+              };
+
               return (
                 <box
-                  flexDirection="column"
+                  flexDirection="row"
                   backgroundColor={isSelected() ? theme.bgSelected : undefined}
-                  paddingLeft={1}
-                  paddingRight={1}
                 >
-                  {/* Line 1: name + timestamp */}
-                  <box flexDirection="row" justifyContent="space-between">
-                    <box flexDirection="row" flexShrink={1}>
-                      <Show when={isSelected()}>
-                        <text fg={theme.borderAccent}>{"\u258c"}</text>
-                      </Show>
-                      <Show when={isPinned()}>
-                        <text fg={theme.pin}>{" \u25cf"}</text>
-                      </Show>
-                      <Show when={isMuted()}>
-                        <text fg={theme.textMuted}>{" \u00d7"}</text>
-                      </Show>
-                      <text
-                        fg={isSelected() ? theme.textStrong : theme.text}
-                        attributes={unread() > 0 ? 1 : 0}
-                      >
-                        {" " + truncate(name(), 28)}
-                      </text>
-                    </box>
-                    <text fg={theme.textMuted}>{time()}</text>
-                  </box>
+                  {/* Selection indicator — full height via background color */}
+                  <box width={1} backgroundColor={isSelected() ? theme.borderAccent : undefined} />
 
-                  {/* Line 2: preview + unread badge */}
-                  <box flexDirection="row" justifyContent="space-between">
-                    <text fg={theme.textMuted}>
-                      {"  " + truncate(chat.jid.endsWith("@g.us") ? "(group)" : "", 30)}
-                    </text>
-                    <Show when={unread() > 0}>
-                      <text fg={theme.unread} attributes={1}>
-                        {" " + String(unread())}
+                  {/* Chat content */}
+                  <box flexDirection="column" flexGrow={1} paddingRight={1}>
+                    {/* Line 1: name + timestamp */}
+                    <box flexDirection="row" justifyContent="space-between">
+                      <box flexDirection="row" flexShrink={1}>
+                        <Show when={isPinned()}>
+                          <text fg={theme.pin}>{"\u25cf "}</text>
+                        </Show>
+                        <text
+                          fg={isSelected() ? theme.textStrong : theme.text}
+                        >
+                          {truncate(name(), 28)}
+                        </text>
+                      </box>
+                      <text fg={theme.textMuted}>{time()}</text>
+                    </box>
+
+                    {/* Line 2: preview + unread badge */}
+                    <box flexDirection="row" justifyContent="space-between">
+                      <text fg={theme.textMuted}>
+                        {" " + preview()}
                       </text>
-                    </Show>
+                      <Show when={unread() > 0}>
+                        <text fg={theme.unread}>
+                          {" " + String(unread())}
+                        </text>
+                      </Show>
+                    </box>
                   </box>
                 </box>
               );

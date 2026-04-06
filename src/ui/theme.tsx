@@ -10,6 +10,7 @@ export interface Theme {
   bgBubbleOther: string;
   bgHover: string;
   bgOverlay: string;
+  bgMessageSelected: string;
   // Text
   text: string;
   textMuted: string;
@@ -49,6 +50,7 @@ export const transparent: Theme = {
   bgBubbleOther: "#2a2a3a",
   bgHover: "#252535",
   bgOverlay: "#1a1a2e",
+  bgMessageSelected: "#3d3560",
   text: "#d0d0d0",
   textMuted: "#606070",
   textAccent: "#7aa2f7",

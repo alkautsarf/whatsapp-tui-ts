@@ -14,6 +14,7 @@ export function useAppKeyboard(actions: {
   onScrollMessages: (dir: number) => void;
   onNavigateChatList: (dir: number) => void;
   onJumpChatList: (pos: "first" | "last") => void;
+  onJumpMessages: (pos: "first" | "last") => void;
   onScrollMessagesPage: (dir: number) => void;
   onYankMessage: () => void;
   onReply: () => void;
@@ -32,10 +33,11 @@ export function useAppKeyboard(actions: {
   }
 
   function cycleFocus(forward: boolean) {
-    const idx = FOCUS_ORDER.indexOf(store.focusZone);
+    const zones = store.selectedChatJid ? FOCUS_ORDER : (["chat-list"] as FocusZone[]);
+    const idx = zones.indexOf(store.focusZone);
     const next = forward
-      ? FOCUS_ORDER[(idx + 1) % FOCUS_ORDER.length]!
-      : FOCUS_ORDER[(idx - 1 + FOCUS_ORDER.length) % FOCUS_ORDER.length]!;
+      ? zones[(idx + 1) % zones.length]!
+      : zones[(idx - 1 + zones.length) % zones.length]!;
     helpers.setFocusZone(next);
   }
 
@@ -127,10 +129,11 @@ export function useAppKeyboard(actions: {
     }
 
     // gg sequence
-    if (evt.name === "g" && !evt.ctrl && !evt.meta) {
+    if (evt.name === "g" && !evt.ctrl && !evt.meta && !evt.shift) {
       if (keyBuffer === "g") {
         clearKeyBuffer();
         if (store.focusZone === "chat-list") actions.onJumpChatList("first");
+        else if (store.focusZone === "messages") actions.onJumpMessages("first");
         return;
       }
       keyBuffer = "g";
@@ -142,6 +145,7 @@ export function useAppKeyboard(actions: {
     if (evt.name === "G" || (evt.shift && evt.name === "g")) {
       clearKeyBuffer();
       if (store.focusZone === "chat-list") actions.onJumpChatList("last");
+      else if (store.focusZone === "messages") actions.onJumpMessages("last");
       return;
     }
 

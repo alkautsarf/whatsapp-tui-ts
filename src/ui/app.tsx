@@ -18,8 +18,8 @@ export function App(props: {
   const theme = useTheme();
 
   let messagesScrollRef: any;
+  let chatListScrollRef: any;
 
-  // Wire up keyboard
   useAppKeyboard({
     onQuit: props.onQuit,
 
@@ -34,20 +34,68 @@ export function App(props: {
       const currentIdx = Math.max(0, chats.findIndex((c) => c.jid === store.highlightedChatJid));
       const newIdx = Math.max(0, Math.min(chats.length - 1, currentIdx + dir));
       helpers.setHighlightedChatJid(chats[newIdx]!.jid);
+      if (chatListScrollRef) {
+        const itemH = 2;
+        const cursorY = newIdx * itemH;
+        const viewTop = chatListScrollRef.scrollTop;
+        const viewH = dims().height - 3; // terminal height minus borders + status bar
+        const pad = 6;
+        if (cursorY < viewTop + pad) {
+          chatListScrollRef.scrollTop = Math.max(0, cursorY - pad);
+        } else if (cursorY + itemH > viewTop + viewH - pad) {
+          chatListScrollRef.scrollTop = cursorY + itemH - viewH + pad;
+        }
+      }
     },
 
     onJumpChatList(pos) {
       const chats = store.chats;
       if (chats.length === 0) return;
-      if (pos === "first") helpers.setHighlightedChatJid(chats[0]!.jid);
-      else helpers.setHighlightedChatJid(chats[chats.length - 1]!.jid);
+      if (pos === "first") {
+        helpers.setHighlightedChatJid(chats[0]!.jid);
+        if (chatListScrollRef) chatListScrollRef.scrollTop = 0;
+      } else {
+        helpers.setHighlightedChatJid(chats[chats.length - 1]!.jid);
+        if (chatListScrollRef) chatListScrollRef.scrollTop = chatListScrollRef.scrollHeight;
+      }
+    },
+
+    onJumpMessages(pos) {
+      const jid = store.selectedChatJid;
+      if (!jid) return;
+      const msgs = store.messages[jid];
+      if (!msgs || msgs.length === 0) return;
+      if (pos === "first") {
+        helpers.setSelectedMessageIndex(msgs.length - 1);
+        if (messagesScrollRef) messagesScrollRef.scrollTop = 0;
+      } else {
+        helpers.setSelectedMessageIndex(0);
+        if (messagesScrollRef) messagesScrollRef.scrollTop = messagesScrollRef.scrollHeight;
+      }
     },
 
     onScrollMessages(dir) {
-      messagesScrollRef?.scrollBy(dir);
+      const jid = store.selectedChatJid;
+      if (!jid) return;
+      const msgs = store.messages[jid];
+      if (!msgs || msgs.length === 0) return;
+      const maxIdx = msgs.length - 1;
+      const newIdx = Math.max(0, Math.min(maxIdx, store.selectedMessageIndex - dir));
+      helpers.setSelectedMessageIndex(newIdx);
+      const targetMsg = msgs[newIdx];
+      const newlines = targetMsg?.text ? (targetMsg.text.match(/\n/g)?.length ?? 0) : 0;
+      messagesScrollRef?.scrollBy(dir * (newlines + 2));
     },
 
     onScrollMessagesPage(dir) {
+      const jid = store.selectedChatJid;
+      if (!jid) return;
+      const msgs = store.messages[jid];
+      if (!msgs) return;
+      const maxIdx = msgs.length - 1;
+      const step = 10;
+      const newIdx = Math.max(0, Math.min(maxIdx, store.selectedMessageIndex - dir * step));
+      helpers.setSelectedMessageIndex(newIdx);
       messagesScrollRef?.scrollBy(dir, "viewport");
     },
 
@@ -56,12 +104,8 @@ export function App(props: {
       if (!jid) return;
       const msgs = store.messages[jid];
       if (!msgs || msgs.length === 0) return;
-      // Yank the most recent message text
-      const reversed = [...msgs].reverse();
-      const idx = store.selectedMessageIndex;
-      const msg = reversed[idx];
+      const msg = msgs[store.selectedMessageIndex];
       if (msg?.text) {
-        // Write to clipboard via OSC 52
         const b64 = Buffer.from(msg.text).toString("base64");
         process.stdout.write(`\x1b]52;c;${b64}\x07`);
       }
@@ -72,9 +116,7 @@ export function App(props: {
       if (!jid) return;
       const msgs = store.messages[jid];
       if (!msgs || msgs.length === 0) return;
-      const reversed = [...msgs].reverse();
-      const idx = store.selectedMessageIndex;
-      const msg = reversed[idx];
+      const msg = msgs[store.selectedMessageIndex];
       if (msg) {
         helpers.setReplyTo(msg.id);
         helpers.setMode("insert");
@@ -115,6 +157,12 @@ export function App(props: {
             getSock={props.getSock}
             onQuit={props.onQuit}
             scrollRef={(el) => (messagesScrollRef = el)}
+            chatListScrollRef={(el) => (chatListScrollRef = el)}
+            onScrollToBottom={() => {
+              helpers.setSelectedMessageIndex(0);
+              const jid = store.selectedChatJid;
+              if (jid) helpers.selectChat(jid);
+            }}
           />
         </Match>
       </Switch>

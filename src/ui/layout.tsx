@@ -16,6 +16,8 @@ export function Layout(props: {
   getSock: () => WASocket | null;
   onQuit: () => void;
   scrollRef?: (el: any) => void;
+  chatListScrollRef?: (el: any) => void;
+  onScrollToBottom?: () => void;
 }) {
   const { store, helpers } = useAppStore();
   const theme = useTheme();
@@ -25,18 +27,20 @@ export function Layout(props: {
     const sock = props.getSock();
     if (!jid || !sock) return;
     const quotedId = store.replyToMessageId;
-    const opts: any = { text };
+    const content: any = { text };
+    const msgOpts: any = {};
     if (quotedId) {
       const quoted = props.queries.getMessage(quotedId);
       if (quoted) {
-        opts.quoted = {
+        msgOpts.quoted = {
           key: { remoteJid: jid, id: quotedId, fromMe: quoted.from_me === 1 },
           message: { conversation: quoted.text || "" },
         };
       }
     }
-    sock.sendMessage(jid, opts).catch(() => {});
+    sock.sendMessage(jid, content, msgOpts).catch(() => {});
     helpers.setReplyTo(null);
+    props.onScrollToBottom?.();
   }
 
   return (
@@ -44,7 +48,7 @@ export function Layout(props: {
       <box flexDirection="row" flexGrow={1}>
         {/* Chat list — 30% */}
         <box width="30%" flexDirection="column" flexShrink={0}>
-          <ChatList queries={props.queries} />
+          <ChatList queries={props.queries} scrollRef={props.chatListScrollRef} />
         </box>
 
         {/* Main area — 70% */}

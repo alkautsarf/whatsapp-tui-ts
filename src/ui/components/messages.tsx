@@ -101,17 +101,17 @@ export function Messages(props: { queries: StoreQueries; scrollRef?: (el: any) =
             flexGrow={1}
             stickyScroll
             stickyStart="bottom"
-            viewportCulling
             contentOptions={{ flexGrow: 1 }}
           >
             <For each={groupedMessages()}>
-              {(item) => (
+              {(item, idx) => (
                 <MessageBubble
                   message={item.message}
                   showSender={item.showSender}
                   showDate={item.showDate}
                   senderName={item.senderName}
                   quotedText={item.quotedText}
+                  isSelected={isFocused() && idx() === (groupedMessages().length - 1 - store.selectedMessageIndex)}
                 />
               )}
             </For>

@@ -75,6 +75,7 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
   function selectChat(jid: string) {
     setStore("selectedChatJid", jid);
     setStore("selectedMessageIndex", 0);
+    setStore("replyToMessageId", null);
     // Load messages for this chat
     const msgs = queries.getMessages(jid, 100);
     setStore("messages", jid, msgs);
@@ -121,7 +122,20 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
             const msgs = queries.getMessages(viewing, 100);
             setStore("messages", viewing, msgs);
           }
-          refreshChats();
+          const chatIdx = store.chats.findIndex(c => c.jid === chatJid);
+          if (chatIdx >= 0) {
+            setStore("chats", chatIdx, "last_msg_ts", msg.timestamp);
+            if (msg.text) setStore("chats", chatIdx, "last_msg_text", msg.text);
+          }
+          // Re-sort only if the updated chat isn't already at the top (after pinned chats)
+          const pinnedCount = store.chats.filter(c => (c.pinned ?? 0) > 0).length;
+          if (chatIdx < 0 || chatIdx > pinnedCount) {
+            const sorted = [...store.chats].sort((a, b) => {
+              if ((a.pinned ?? 0) !== (b.pinned ?? 0)) return (b.pinned ?? 0) - (a.pinned ?? 0);
+              return (b.last_msg_ts ?? 0) - (a.last_msg_ts ?? 0);
+            });
+            setStore("chats", sorted);
+          }
         },
 
         onChatUpdate() {

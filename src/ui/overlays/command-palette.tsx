@@ -95,6 +95,7 @@ export function CommandPalette(props: { onQuit: () => void }) {
           placeholder="Type a command..."
           textColor={theme.text}
           focused
+          cursorStyle={{ style: "block", blinking: false }}
           onInput={(v: string) => { setQuery(v); setSelectedIdx(0); }}
           onKeyDown={handleKeyDown}
         />

@@ -84,7 +84,7 @@ export function InputArea(props: {
           placeholderColor={theme.textMuted}
           textColor={theme.text}
           wrapMode="word"
-          cursorStyle={{ style: "line", blinking: false }}
+          cursorStyle={{ style: "block", blinking: false }}
           keyBindings={[
             { name: "return", action: "submit" },
             { name: "return", meta: true, action: "newline" },
