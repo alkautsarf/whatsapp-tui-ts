@@ -33,16 +33,16 @@ export function StatusBar() {
   });
 
   const hints = createMemo(() => {
-    if (store.mode === "insert") return "Enter send \u00b7 Esc normal";
-    if (store.mode === "search") return "Enter search \u00b7 Esc cancel";
+    if (store.mode === "insert") return "Enter send \u00b7 @ attach \u00b7 Ctrl+G editor \u00b7 Esc normal";
+    if (store.mode === "search") return "Enter select \u00b7 Esc cancel";
 
     switch (store.focusZone) {
       case "chat-list":
         return "j/k nav \u00b7 Enter open \u00b7 / search \u00b7 i insert";
       case "messages":
-        return "j/k scroll \u00b7 r reply \u00b7 y yank \u00b7 h back";
+        return "j/k scroll \u00b7 r reply \u00b7 y yank \u00b7 a attach \u00b7 h back";
       case "input":
-        return "i insert \u00b7 Esc back";
+        return "i insert \u00b7 a attach \u00b7 Ctrl+G editor \u00b7 Esc back";
     }
   });
 

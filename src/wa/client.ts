@@ -18,6 +18,8 @@ export interface WaClient {
   sock: WASocket;
 }
 
+const FALLBACK_WA_VERSION: [number, number, number] = [2, 3000, 1035194821];
+
 export interface ClientOptions {
   authDir?: string;
   logLevel?: string;
@@ -49,15 +51,28 @@ function initClientCore(options: ClientOptions): {
     get sock() { return sock!; },
   };
 
+  async function fetchVersion(): Promise<[number, number, number]> {
+    try {
+      const result = await Promise.race([
+        fetchLatestBaileysVersion(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 5000)),
+      ]);
+      log("wa", `WA Web version: ${result.version.join(".")} (latest: ${result.isLatest})`);
+      return result.version;
+    } catch {
+      warn("wa", `Version fetch failed/timeout, using fallback`);
+      return [...FALLBACK_WA_VERSION];
+    }
+  }
+
   async function start() {
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
     const logger = pino({ level: logLevel }) as any;
-    const { version, isLatest } = await fetchLatestBaileysVersion();
-    log("wa", `WA Web version: ${version.join(".")} (latest: ${isLatest})`);
+    let version = await fetchVersion();
 
     let reconnectAttempt = 0;
 
-    function connect() {
+    async function connect() {
       sock = makeWASocket({
         version,
         auth: {
@@ -92,16 +107,24 @@ function initClientCore(options: ClientOptions): {
             return;
           }
 
+          if (statusCode === 405) {
+            version = await fetchVersion();
+          }
+
           if (reconnectAttempt < 5) {
             reconnectAttempt++;
-            const delay = Math.min(reconnectAttempt * 3000, 15000);
+            const delay = Math.min(reconnectAttempt * 2000, 10000);
             warn("wa", `Disconnected (${statusCode}), reconnecting in ${delay / 1000}s... (${reconnectAttempt}/5)`);
             options.onReconnecting?.(reconnectAttempt);
             await new Promise((r) => setTimeout(r, delay));
             connect();
           } else {
-            err("wa", `Max reconnection attempts. Last error: ${statusCode}`);
-            options.onDisconnected?.(statusCode);
+            // Reset and try one more cycle
+            reconnectAttempt = 0;
+            warn("wa", `Reconnect cycle exhausted, restarting connection...`);
+            options.onReconnecting?.(0);
+            await new Promise((r) => setTimeout(r, 5000));
+            connect();
           }
         } else if (connection === "open") {
           reconnectAttempt = 0;

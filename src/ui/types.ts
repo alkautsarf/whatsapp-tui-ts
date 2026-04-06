@@ -21,6 +21,11 @@ export interface OverlayState {
   type: OverlayType;
 }
 
+export interface InputMethods {
+  getText: () => string;
+  setText: (text: string) => void;
+}
+
 export interface EncodedImageData {
   cols: number;
   rows: number;

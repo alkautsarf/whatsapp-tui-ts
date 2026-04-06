@@ -1,4 +1,7 @@
 import { Show } from "solid-js";
+import { existsSync } from "fs";
+import { readFile } from "fs/promises";
+import { basename } from "path";
 import { useAppStore } from "./state.tsx";
 import { useTheme } from "./theme.tsx";
 import { ChatList } from "./components/chat-list.tsx";
@@ -8,8 +11,19 @@ import { InputArea } from "./components/input.tsx";
 import { StatusBar } from "./components/status-bar.tsx";
 import { SearchOverlay } from "./overlays/search.tsx";
 import { CommandPalette } from "./overlays/command-palette.tsx";
+import { log } from "../utils/log.ts";
 import type { StoreQueries } from "../store/queries.ts";
 import type { WASocket } from "@whiskeysockets/baileys";
+import type { InputMethods } from "./types.ts";
+
+function mediaTypeFromExt(ext: string): "image" | "video" | "audio" | "document" | "sticker" {
+  const e = ext.toLowerCase();
+  if (["jpg", "jpeg", "png", "gif", "bmp", "heic", "heif"].includes(e)) return "image";
+  if (["webp"].includes(e)) return "sticker";
+  if (["mp4", "mov", "avi", "mkv", "webm", "3gp"].includes(e)) return "video";
+  if (["mp3", "ogg", "wav", "opus", "m4a", "aac", "flac"].includes(e)) return "audio";
+  return "document";
+}
 
 export function Layout(props: {
   queries: StoreQueries;
@@ -17,6 +31,7 @@ export function Layout(props: {
   onQuit: () => void;
   scrollRef?: (el: any) => void;
   chatListScrollRef?: (el: any) => void;
+  inputMethodsRef?: (methods: InputMethods) => void;
   onScrollToBottom?: () => void;
 }) {
   const { store, helpers } = useAppStore();
@@ -26,6 +41,29 @@ export function Layout(props: {
     const jid = store.selectedChatJid;
     const sock = props.getSock();
     if (!jid || !sock) return;
+
+    // Check for @"quoted path", @'quoted path', or @path in the text — send as media
+    const dblQuoteMatch = text.match(/@"([^"]+)"/);
+    const sglQuoteMatch = text.match(/@'([^']+)'/);
+    const plainMatch = text.match(/@(\S+)/);
+    const atMatch = dblQuoteMatch || sglQuoteMatch || plainMatch;
+    if (atMatch) {
+      const filePath = atMatch[1]!;
+      // Expand ~ to home
+      const expanded = filePath.startsWith("~") ? (process.env.HOME || "") + filePath.slice(1) : filePath;
+      if (existsSync(expanded)) {
+        // Remove the @path (quoted or plain) from text to get caption
+        const atPattern = dblQuoteMatch ? /@"[^"]+"?\s?/
+          : sglQuoteMatch ? /@'[^']+'?\s?/
+          : /@\S+\s?/;
+        const caption = text.replace(atPattern, "").trim() || undefined;
+        sendMedia(sock, jid, expanded, caption);
+        helpers.setReplyTo(null);
+        props.onScrollToBottom?.();
+        return;
+      }
+    }
+
     const quotedId = store.replyToMessageId;
     const content: any = { text };
     const msgOpts: any = {};
@@ -43,6 +81,37 @@ export function Layout(props: {
     props.onScrollToBottom?.();
   }
 
+  async function sendMedia(sock: WASocket, jid: string, filePath: string, caption?: string) {
+    const ext = filePath.split(".").pop() ?? "";
+    const type = mediaTypeFromExt(ext);
+    const buffer = await readFile(filePath);
+    const fileName = basename(filePath);
+
+    let content: any;
+    switch (type) {
+      case "image":
+        content = { image: buffer, caption };
+        break;
+      case "sticker":
+        content = { sticker: buffer };
+        break;
+      case "video":
+        content = { video: buffer, caption };
+        break;
+      case "audio":
+        content = { audio: buffer, ptt: false };
+        break;
+      case "document":
+        content = { document: buffer, fileName, caption };
+        break;
+    }
+
+    log("media", `Sending ${type}: ${fileName}`);
+    sock.sendMessage(jid, content).catch((e: Error) => {
+      log("media", `Send failed: ${e.message}`);
+    });
+  }
+
   return (
     <box flexDirection="column" flexGrow={1}>
       <box flexDirection="row" flexGrow={1}>
@@ -55,7 +124,11 @@ export function Layout(props: {
         <box flexGrow={1} flexDirection="column">
           <ChatHeader queries={props.queries} />
           <Messages queries={props.queries} scrollRef={props.scrollRef} />
-          <InputArea queries={props.queries} onSend={handleSend} />
+          <InputArea
+            queries={props.queries}
+            onSend={handleSend}
+            inputMethodsRef={props.inputMethodsRef}
+          />
         </box>
       </box>
 

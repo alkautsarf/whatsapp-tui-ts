@@ -88,8 +88,9 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
     // Load messages for this chat
     const msgs = queries.getMessages(jid, 100);
     setStore("messages", jid, msgs);
-    // Reset unread in store (visual only)
+    // Reset unread in both store AND database (persists across restarts)
     setStore("chats", (c) => c.jid === jid, "unread", 0);
+    queries.clearUnread(jid);
   }
 
   const exhaustedChats = new Set<string>();

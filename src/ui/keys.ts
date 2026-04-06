@@ -19,6 +19,8 @@ export function useAppKeyboard(actions: {
   onYankMessage: () => void;
   onReply: () => void;
   onOpenImage?: () => void;
+  onOpenEditor?: () => void;
+  onTypeAt?: () => void;
 }) {
   const { store, helpers } = useAppStore();
 
@@ -79,11 +81,15 @@ export function useAppKeyboard(actions: {
       return;
     }
 
-    // Insert mode: pass through to textarea except Esc
+    // Insert mode: pass through to textarea except Esc and Ctrl+G
     if (store.mode === "insert") {
       if (evt.name === "escape") {
         drillBack();
         evt.preventDefault();
+      }
+      if (evt.ctrl && evt.name === "g") {
+        evt.preventDefault();
+        actions.onOpenEditor?.();
       }
       return;
     }
@@ -119,6 +125,23 @@ export function useAppKeyboard(actions: {
     // Escape — drill back
     if (evt.name === "escape") {
       drillBack();
+      return;
+    }
+
+    // Open $EDITOR for long text (Ctrl+G)
+    if (evt.ctrl && evt.name === "g") {
+      actions.onOpenEditor?.();
+      return;
+    }
+
+    // Attach file — enter insert mode and type @ to trigger inline completion
+    if (evt.name === "a" && !evt.ctrl && !evt.meta) {
+      if (store.selectedChatJid) {
+        helpers.setMode("insert");
+        helpers.setFocusZone("input");
+        // Type @ into the textarea to trigger completion
+        actions.onTypeAt?.();
+      }
       return;
     }
 

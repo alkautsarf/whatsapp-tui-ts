@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] - 2026-04-06
+
+### Added
+
+- Inline `@` file picker: type `@` in insert mode to browse filesystem, Tab to select, supports quoted paths for spaces
+- Ctrl+G editor mode: opens `$EDITOR` (vim) for composing long messages, content persists back to input
+- Media send via `@path`: attach images, videos, audio, documents with optional caption
+- Video/audio/document preview: Enter on media messages opens with system viewer (`open` on macOS, `xdg-open` on Linux)
+- Long paste handling: pastes over 500 chars show truncated preview, full text sent on Enter
+- Chat list renders immediately on startup from SQLite cache (no more "Connecting..." blank screen)
+- `clearUnread` persists to database (unread count survives app restarts)
+
+### Changed
+
+- Image encoding pipeline: thumbnails render instantly, full-res downloads happen in background with 3x parallelism
+- Failed media downloads cached to avoid retrying expired URLs (capped at 500)
+- Connection resilience: 5s timeout on version fetch, re-fetch on 405 errors, never gives up reconnecting
+- Yank (y) clipboard now wrapped in DCS passthrough for tmux compatibility
+- Status bar hints updated with new keybindings (`@`, `Ctrl+G`, `a`)
+
+### Fixed
+
+- Paste doubling: removed manual `handlePaste` call that conflicted with OpenTUI's native paste handler
+- Editor content not persisting: replaced non-existent `replaceContent()` with correct `replaceText()`/`setText()` API
+- Video files no longer passed to image encoder (was causing `sips` failures on `.mp4` files)
+- `fetchLatestBaileysVersion()` no longer blocks startup for 75+ seconds on slow networks
+
+### Removed
+
+- Separate file-picker overlay (replaced by inline `@` completion)
+- "Connecting to WhatsApp..." blocking screen (Layout now renders for all connection states)
+
 ## [0.3.0] - 2026-04-06
 
 ### Added
@@ -126,6 +158,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.4.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.0
 [0.3.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.3.0
 [0.2.3]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.2.3
 [0.2.2]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.2.2

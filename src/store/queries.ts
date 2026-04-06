@@ -121,6 +121,10 @@ export function initQueries(db: DbInstances): StoreQueries {
     INSERT OR IGNORE INTO chats (jid, is_group) VALUES (?1, ?2)
   `);
 
+  const clearUnreadStmt = writer.prepare(`
+    UPDATE chats SET unread = 0 WHERE jid = ?1
+  `);
+
   const insertMsgStmt = writer.prepare(`
     INSERT OR REPLACE INTO messages
       (id, chat_jid, sender_jid, from_me, timestamp, type, text,
@@ -330,6 +334,10 @@ export function initQueries(db: DbInstances): StoreQueries {
 
     updateMediaPath(id, path) {
       updateMediaPathStmt.run(path, id);
+    },
+
+    clearUnread(jid: string) {
+      clearUnreadStmt.run(jid);
     },
 
     upsertGroupParticipants(groupJid, participants) {

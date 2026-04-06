@@ -44,6 +44,17 @@ export function getRawMessage(msgId: string): WAMessage | undefined {
   return rawMessageCache.get(msgId);
 }
 
+// Track failed downloads to avoid retrying expired URLs (capped at 500)
+const failedDownloads = new Set<string>();
+const MAX_FAILED = 500;
+
+export function isDownloadable(row: MessageRow): boolean {
+  // Skip if we already know this download fails
+  if (failedDownloads.has(row.id)) return false;
+  // Must have either a cached raw message or stored metadata
+  return rawMessageCache.has(row.id) || !!(row.media_key && row.direct_path);
+}
+
 export async function downloadAndCache(
   sock: WASocket,
   row: MessageRow,
@@ -53,6 +64,9 @@ export async function downloadAndCache(
   const path = mediaCachePath(row.id, row.mimetype);
 
   if (existsSync(path)) return path;
+
+  // Skip if we already know this fails
+  if (failedDownloads.has(row.id)) return null;
 
   // Try cached raw WAMessage first (fastest)
   const raw = rawMessageCache.get(row.id);
@@ -89,10 +103,17 @@ export async function downloadAndCache(
       store?.updateMediaPath(row.id, path);
       return path;
     } catch (e) {
-      warn("media", `Download via metadata failed: ${(e as Error)?.message}`);
+      failedDownloads.add(row.id);
+      if (failedDownloads.size > MAX_FAILED) {
+        const first = failedDownloads.values().next().value;
+        if (first) failedDownloads.delete(first);
+      }
+      warn("media", `Download failed (won't retry): ${row.id.slice(0,12)}`);
     }
+  } else if (!raw) {
+    // No raw message and no metadata — mark as permanently failed
+    failedDownloads.add(row.id);
   }
 
-  warn("media", `No cached WAMessage or metadata for ${row.id}`);
   return null;
 }

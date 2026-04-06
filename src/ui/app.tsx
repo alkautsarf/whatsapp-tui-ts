@@ -5,11 +5,14 @@ import { useTheme } from "./theme.tsx";
 import { useAppKeyboard } from "./keys.ts";
 import { Layout } from "./layout.tsx";
 import { QROverlay } from "./overlays/qr-code.tsx";
-import { encodeForInline, transmitImages, clearAllImages, showFullView, IMAGE_MEDIA_TYPES, type EncodedImage } from "./image.ts";
-import { downloadAndCache } from "../wa/media.ts";
+import { encodeForInline, transmitImages, clearAllImages, showFullView, IMAGE_MEDIA_TYPES, isInTmux, kittyWrite, type EncodedImage } from "./image.ts";
+import { downloadAndCache, isDownloadable } from "../wa/media.ts";
 import { log } from "../utils/log.ts";
+import { execSync } from "child_process";
+import { writeFileSync, readFileSync, unlinkSync } from "fs";
 import type { StoreQueries } from "../store/queries.ts";
 import type { WASocket } from "@whiskeysockets/baileys";
+import type { InputMethods } from "./types.ts";
 
 export function App(props: {
   queries: StoreQueries;
@@ -31,6 +34,8 @@ export function App(props: {
   // Track which messages we've already started encoding (prevents reactive loops)
   const encodingStarted = new Set<string>();
 
+  let inputMethods: InputMethods | null = null;
+
   // Watch for new image messages in the currently viewed chat
   createEffect(() => {
     const jid = store.selectedChatJid;
@@ -47,44 +52,93 @@ export function App(props: {
     }
   });
 
-  // Download + encode images in background, then transmit briefly
+  // Encode images for a chat — thumbnails first (instant), downloads in background
   async function encodeImagesForChat(msgs: import("../store/queries.ts").MessageRow[]) {
-    log("image", `Processing ${msgs.length} image messages...`);
-
+    msgs = msgs.filter(m => IMAGE_MEDIA_TYPES.has(m.media_type ?? m.type));
+    if (msgs.length === 0) return;
+    const fs = await import("fs");
     const sock = props.getSock();
 
-    // Phase 1: Download + encode WITHOUT freezing (TUI stays responsive)
+    // Phase 1: Encode from local cache or thumbnails (instant, no network)
     const encoded: EncodedImage[] = [];
+    const needsDownload: import("../store/queries.ts").MessageRow[] = [];
+
     for (const m of msgs) {
       try {
         let imagePath = m.media_path;
-        if (!imagePath && sock) {
-          imagePath = await downloadAndCache(sock, m, props.queries);
-        }
-        if (!imagePath) {
-          if (!m.thumbnail) continue;
-          imagePath = `/tmp/wa-thumb-${m.id}.jpg`;
-          const fs = await import("fs");
-          fs.writeFileSync(imagePath, Buffer.from(m.thumbnail, "base64"));
+
+        // Already cached on disk — use it directly
+        if (imagePath && fs.existsSync(imagePath)) {
+          const maxCols = m.type === "stickerMessage" ? 15 : 30;
+          const img = await encodeForInline(imagePath, maxCols, 12);
+          helpers.setEncodedImage(m.id, {
+            cols: img.cols, rows: img.rows,
+            placeholders: img.placeholders, fgHex: img.fgHex, imageId: img.imageId,
+          });
+          encoded.push(img);
+          continue;
         }
 
-        const maxCols = m.type === "stickerMessage" ? 15 : 30;
-        const img = await encodeForInline(imagePath, maxCols, 12);
-        helpers.setEncodedImage(m.id, {
-          cols: img.cols, rows: img.rows,
-          placeholders: img.placeholders, fgHex: img.fgHex, imageId: img.imageId,
-        });
-        encoded.push(img);
-        log("image", `Encoded ${m.id.slice(0, 12)} (${img.cols}x${img.rows})`);
+        // Has thumbnail — use it immediately (no download needed for preview)
+        if (m.thumbnail) {
+          const thumbPath = `/tmp/wa-thumb-${m.id}.jpg`;
+          fs.writeFileSync(thumbPath, Buffer.from(m.thumbnail, "base64"));
+          const maxCols = m.type === "stickerMessage" ? 15 : 30;
+          const img = await encodeForInline(thumbPath, maxCols, 12);
+          helpers.setEncodedImage(m.id, {
+            cols: img.cols, rows: img.rows,
+            placeholders: img.placeholders, fgHex: img.fgHex, imageId: img.imageId,
+          });
+          encoded.push(img);
+        }
+
+        // Queue for background download only if downloadable
+        if (!imagePath && sock && isDownloadable(m)) {
+          needsDownload.push(m);
+        }
       } catch (e) {
         log("image", `Encode failed for ${m.id}: ${(e as Error)?.message}`);
       }
     }
 
-    // Phase 2: Brief freeze ONLY for transmit (< 200ms)
+    // Transmit whatever we encoded so far (thumbnails + cached)
     if (encoded.length > 0) {
+      log("image", `Encoded ${encoded.length} images (instant)`);
       const renderer = props.getRenderer();
       if (renderer) transmitImages(renderer, encoded);
+    }
+
+    // Phase 2: Background download of full-res images (non-blocking, parallel)
+    if (needsDownload.length > 0 && sock) {
+      log("image", `Downloading ${needsDownload.length} images in background...`);
+      const CONCURRENCY = 3;
+      for (let i = 0; i < needsDownload.length; i += CONCURRENCY) {
+        const batch = needsDownload.slice(i, i + CONCURRENCY);
+        const results = await Promise.allSettled(
+          batch.map(m => downloadAndCache(sock, m, props.queries))
+        );
+        // Encode any successful downloads and transmit
+        const newEncoded: EncodedImage[] = [];
+        for (let j = 0; j < results.length; j++) {
+          const result = results[j]!;
+          if (result.status === "fulfilled" && result.value) {
+            const m = batch[j]!;
+            try {
+              const maxCols = m.type === "stickerMessage" ? 15 : 30;
+              const img = await encodeForInline(result.value, maxCols, 12);
+              helpers.setEncodedImage(m.id, {
+                cols: img.cols, rows: img.rows,
+                placeholders: img.placeholders, fgHex: img.fgHex, imageId: img.imageId,
+              });
+              newEncoded.push(img);
+            } catch {}
+          }
+        }
+        if (newEncoded.length > 0) {
+          const renderer = props.getRenderer();
+          if (renderer) transmitImages(renderer, newEncoded);
+        }
+      }
     }
   }
 
@@ -115,6 +169,81 @@ export function App(props: {
     helpers.clearEncodedImages();
     const chatMsgs = store.messages[jid];
     if (chatMsgs) encodeImagesForChat(chatMsgs);
+  }
+
+  // Open $EDITOR for composing long text
+  function openEditor() {
+    const renderer = props.getRenderer();
+    if (!renderer) return;
+
+    const currentText = inputMethods?.getText() ?? "";
+    const tmpFile = `/tmp/wa-edit-${Date.now()}.txt`;
+    writeFileSync(tmpFile, currentText);
+
+    renderer.suspend();
+    // Restore terminal state for editor: show cursor, disable raw mode
+    process.stdout.write("\x1b[?25h");
+    if (process.stdin.setRawMode) process.stdin.setRawMode(false);
+    process.stdin.resume();
+    try {
+      const editor = process.env.EDITOR || process.env.VISUAL || "vim";
+      execSync(`${editor} "${tmpFile}"`, {
+        stdio: "inherit",
+        env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` },
+      });
+    } catch (e) {
+      log("editor", `Editor failed: ${(e as Error)?.message}`);
+    }
+
+    // Resume TUI — OpenTUI will re-set raw mode on its own
+    renderer.resume();
+
+    try {
+      const newText = readFileSync(tmpFile, "utf-8").replace(/\n$/, "");
+      unlinkSync(tmpFile);
+      if (newText && newText !== currentText) {
+        inputMethods?.setText(newText);
+        helpers.setMode("insert");
+        helpers.setFocusZone("input");
+      }
+    } catch {}
+
+    // Re-transmit inline images after resume (alt screen was cleared)
+    const jid = store.selectedChatJid;
+    if (jid) {
+      encodingStarted.clear();
+      helpers.clearEncodedImages();
+      clearAllImages();
+      const chatMsgs = store.messages[jid];
+      if (chatMsgs) encodeImagesForChat(chatMsgs);
+    }
+  }
+
+  // Open video/audio/document with system viewer (non-blocking)
+  async function openMediaExternal(msg: import("../store/queries.ts").MessageRow) {
+    let path = msg.media_path;
+    if (!path) {
+      const sock = props.getSock();
+      if (sock) path = await downloadAndCache(sock, msg, props.queries);
+    }
+    if (!path) {
+      log("media", `No path for ${msg.id}`);
+      return;
+    }
+    const isMac = process.platform === "darwin";
+    try {
+      // Spawn in background — TUI stays active
+      const { spawn } = await import("child_process");
+      if (isMac) {
+        // Open with default macOS app (QuickTime for video, Preview for PDF, etc.)
+        spawn("open", [path], { detached: true, stdio: "ignore" }).unref();
+      } else {
+        spawn("xdg-open", [path], { detached: true, stdio: "ignore" }).unref();
+      }
+      log("media", `Opened ${path} with ${isMac ? "open" : "xdg-open"}`);
+    } catch (e) {
+      log("media", `Failed to open: ${(e as Error)?.message}`);
+    }
   }
 
   useAppKeyboard({
@@ -246,7 +375,8 @@ export function App(props: {
       const msg = msgs[store.selectedMessageIndex];
       if (msg?.text) {
         const b64 = Buffer.from(msg.text).toString("base64");
-        process.stdout.write(`\x1b]52;c;${b64}\x07`);
+        const osc = `\x1b]52;c;${b64}\x07`;
+        kittyWrite(osc);
       }
     },
 
@@ -273,7 +403,20 @@ export function App(props: {
       const mt = msg.media_type ?? msg.type;
       if (mt === "imageMessage" || mt === "stickerMessage") {
         openImageFullView(msg.id);
+      } else if (mt === "videoMessage" || mt === "audioMessage" || mt === "documentMessage") {
+        openMediaExternal(msg);
       }
+    },
+
+    onOpenEditor() {
+      openEditor();
+    },
+
+    onTypeAt() {
+      // Insert @ character into the textarea to trigger inline file completion
+      setTimeout(() => {
+        try { inputMethods?.setText((inputMethods?.getText() ?? "") + "@"); } catch {}
+      }, 50);
     },
 
   });
@@ -286,12 +429,6 @@ export function App(props: {
       backgroundColor={theme.bg}
     >
       <Switch>
-        <Match when={store.connection.status === "connecting"}>
-          <box flexGrow={1} justifyContent="center" alignItems="center">
-            <text fg={theme.textMuted}>Connecting to WhatsApp...</text>
-          </box>
-        </Match>
-
         <Match when={store.connection.status === "qr"}>
           <QROverlay data={store.connection.qrData!} />
         </Match>
@@ -303,13 +440,14 @@ export function App(props: {
           </box>
         </Match>
 
-        <Match when={store.connection.status === "connected" || store.connection.status === "reconnecting"}>
+        <Match when={store.connection.status === "connecting" || store.connection.status === "connected" || store.connection.status === "reconnecting"}>
           <Layout
             queries={props.queries}
             getSock={props.getSock}
             onQuit={props.onQuit}
             scrollRef={(el) => (messagesScrollRef = el)}
             chatListScrollRef={(el) => (chatListScrollRef = el)}
+            inputMethodsRef={(methods) => { inputMethods = methods; }}
             onScrollToBottom={() => {
               helpers.setSelectedMessageIndex(0);
               const jid = store.selectedChatJid;
