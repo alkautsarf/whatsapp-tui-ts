@@ -1,11 +1,12 @@
 {
   "name": "whatsapp-tui-ts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "module": "src/index.ts",
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "bun run src/index.ts",
+    "start": "bun run src/index.tsx",
+    "start:repl": "bun run src/index.tsx --repl",
     "test:harness": "bun run test.ts"
   },
   "devDependencies": {
@@ -17,8 +18,12 @@
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",
+    "@opentui/core": "^0.1.97",
+    "@opentui/solid": "^0.1.97",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "pino": "^10.3.1",
-    "qrcode-terminal": "^0.12.0"
+    "qrcode-generator": "^2.0.4",
+    "qrcode-terminal": "^0.12.0",
+    "solid-js": "^1.9.12"
   }
 }

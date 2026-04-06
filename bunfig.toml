@@ -1,4 +1,4 @@
-preload = ["./ws-override.ts"]
+preload = ["./ws-override.ts", "@opentui/solid/preload"]
 
 [install]
 peer = false

@@ -23,95 +23,120 @@ export interface ClientOptions {
   logLevel?: string;
   onQr?: (qr: string) => void;
   onConnected?: (sock: WASocket) => void;
+  onReconnecting?: (attempt: number) => void;
   onDisconnected?: (reason: number | undefined) => void;
   getMessage?: (key: WAMessageKey) => Promise<WAMessageContent | undefined>;
 }
 
-export async function createClient(options: ClientOptions = {}): Promise<WaClient> {
+// ── Shared core ─────────────────────────────────────────────────────
+
+function initClientCore(options: ClientOptions): {
+  client: WaClient;
+  connectedPromise: Promise<void>;
+  start: () => Promise<void>;
+} {
   const authDir = options.authDir ?? "./auth_state";
   const logLevel = options.logLevel ?? "silent";
 
   const hasSession = existsSync(`${authDir}/creds.json`);
   log("wa", hasSession ? "Session found — resuming" : "No session — QR auth required");
 
-  const { state, saveCreds } = await useMultiFileAuthState(authDir);
-  const logger = pino({ level: logLevel }) as any;
-  const { version, isLatest } = await fetchLatestBaileysVersion();
-  log("wa", `WA Web version: ${version.join(".")} (latest: ${isLatest})`);
-
-  let reconnectAttempt = 0;
   let sock: WASocket;
   let resolveConnected: (() => void) | null = null;
   const connectedPromise = new Promise<void>((r) => { resolveConnected = r; });
 
-  function connect() {
-    sock = makeWASocket({
-      version,
-      auth: {
-        creds: state.creds,
-        keys: makeCacheableSignalKeyStore(state.keys, logger),
-      },
-      logger,
-      browser: Browsers.macOS("Desktop"),
-      generateHighQualityLinkPreview: false,
-      syncFullHistory: true,
-      getMessage: options.getMessage ?? (async () => undefined),
-    });
+  const client: WaClient = {
+    get sock() { return sock!; },
+  };
 
-    sock.ev.on("connection.update", async (update) => {
-      const { connection, lastDisconnect, qr } = update;
+  async function start() {
+    const { state, saveCreds } = await useMultiFileAuthState(authDir);
+    const logger = pino({ level: logLevel }) as any;
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    log("wa", `WA Web version: ${version.join(".")} (latest: ${isLatest})`);
 
-      if (qr) {
-        if (options.onQr) {
-          options.onQr(qr);
-        } else {
-          log("auth", "Scan this QR code with WhatsApp:");
-          qrcode.generate(qr, { small: true });
+    let reconnectAttempt = 0;
+
+    function connect() {
+      sock = makeWASocket({
+        version,
+        auth: {
+          creds: state.creds,
+          keys: makeCacheableSignalKeyStore(state.keys, logger),
+        },
+        logger,
+        browser: Browsers.macOS("Desktop"),
+        generateHighQualityLinkPreview: false,
+        syncFullHistory: true,
+        getMessage: options.getMessage ?? (async () => undefined),
+      });
+
+      sock.ev.on("connection.update", async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+          if (options.onQr) {
+            options.onQr(qr);
+          } else {
+            log("auth", "Scan this QR code with WhatsApp:");
+            qrcode.generate(qr, { small: true });
+          }
         }
-      }
 
-      if (connection === "close") {
-        const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+        if (connection === "close") {
+          const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
 
-        if (statusCode === DisconnectReason.loggedOut) {
-          err("wa", "Logged out. Delete auth_state/ and restart.");
-          options.onDisconnected?.(statusCode);
-          return;
+          if (statusCode === DisconnectReason.loggedOut) {
+            err("wa", "Logged out. Delete auth_state/ and restart.");
+            options.onDisconnected?.(statusCode);
+            return;
+          }
+
+          if (reconnectAttempt < 5) {
+            reconnectAttempt++;
+            const delay = Math.min(reconnectAttempt * 3000, 15000);
+            warn("wa", `Disconnected (${statusCode}), reconnecting in ${delay / 1000}s... (${reconnectAttempt}/5)`);
+            options.onReconnecting?.(reconnectAttempt);
+            await new Promise((r) => setTimeout(r, delay));
+            connect();
+          } else {
+            err("wa", `Max reconnection attempts. Last error: ${statusCode}`);
+            options.onDisconnected?.(statusCode);
+          }
+        } else if (connection === "open") {
+          reconnectAttempt = 0;
+          ok("wa", "Connected to WhatsApp!");
+          const me = sock.user;
+          if (me) {
+            ok("wa", `JID: ${me.id} | Name: ${me.name || "(none)"} | LID: ${me.lid || "(none)"}`);
+          }
+          options.onConnected?.(sock);
+          resolveConnected?.();
         }
+      });
 
-        if (reconnectAttempt < 5) {
-          reconnectAttempt++;
-          const delay = Math.min(reconnectAttempt * 3000, 15000);
-          warn("wa", `Disconnected (${statusCode}), reconnecting in ${delay / 1000}s... (${reconnectAttempt}/5)`);
-          await new Promise((r) => setTimeout(r, delay));
-          connect();
-        } else {
-          err("wa", `Max reconnection attempts. Last error: ${statusCode}`);
-          options.onDisconnected?.(statusCode);
-        }
-      } else if (connection === "open") {
-        reconnectAttempt = 0;
-        ok("wa", "Connected to WhatsApp!");
-        const me = sock.user;
-        if (me) {
-          ok("wa", `JID: ${me.id} | Name: ${me.name || "(none)"} | LID: ${me.lid || "(none)"}`);
-        }
-        options.onConnected?.(sock);
-        resolveConnected?.();
-      }
-    });
+      sock.ev.on("creds.update", saveCreds);
+    }
 
-    sock.ev.on("creds.update", saveCreds);
+    connect();
   }
 
-  connect();
+  return { client, connectedPromise, start };
+}
 
-  // Wait for first successful connection before returning
+// ── Blocking (REPL) ─────────────────────────────────────────────────
+
+export async function createClient(options: ClientOptions = {}): Promise<WaClient> {
+  const { client, connectedPromise, start } = initClientCore(options);
+  await start();
   await connectedPromise;
+  return client;
+}
 
-  return {
-    get sock() {
-      return sock!;
-    },
-  };
+// ── Non-blocking (TUI) ─────────────────────────────────────────────
+
+export function createClientNonBlocking(options: ClientOptions = {}): WaClient {
+  const { client, start } = initClientCore(options);
+  start(); // fire and forget
+  return client;
 }

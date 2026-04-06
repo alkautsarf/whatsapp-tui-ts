@@ -4,6 +4,7 @@ import {
   type WAMessage,
 } from "@whiskeysockets/baileys";
 import type { StoreQueries, ContactRow, ChatRow, MessageRow } from "../store/queries.ts";
+import type { ReactiveBridge } from "../ui/state.tsx";
 import { log, warn } from "../utils/log.ts";
 
 // ── Converters ──────────────────────────────────────────────────────
@@ -90,7 +91,7 @@ function convertMessage(msg: WAMessage): MessageRow | null {
 
 // ── Handler registration ────────────────────────────────────────────
 
-export function registerHandlers(sock: WASocket, store: StoreQueries) {
+export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: ReactiveBridge) {
   // History sync — the big one
   sock.ev.on("messaging-history.set" as any, (data: any) => {
     const { chats, contacts, messages } = data;
@@ -103,15 +104,11 @@ export function registerHandlers(sock: WASocket, store: StoreQueries) {
     const allMsgRows: MessageRow[] = [];
     function tryConvertEntry(entry: any) {
       try {
-        // History sync entries: { key, message, messageTimestamp, ... }
-        // entry.message is the inner content (e.g. { conversation: "text" })
-        // entry.key has { id, remoteJid, fromMe }
         if (entry?.key?.id) {
           const row = convertMessage(entry);
           if (row) allMsgRows.push(row);
           return;
         }
-        // Fallback: try entry.message as full WAMessage
         const msg = entry?.message ?? entry;
         if (!msg) return;
         const row = convertMessage(msg);
@@ -141,30 +138,40 @@ export function registerHandlers(sock: WASocket, store: StoreQueries) {
     if (allMsgRows.length) store.bulkInsertMessages(allMsgRows);
 
     log("sync", `${contacts?.length ?? 0}C ${chats?.length ?? 0}Ch ${allMsgRows.length}M`);
+
+    bridge?.onHistoryBatch();
   });
 
-  // Contacts
+  // Contacts — call bridge once per batch, not per item
   sock.ev.on("contacts.upsert", (newContacts) => {
-    store.bulkUpsertContacts(newContacts.map(convertContact));
+    const rows = newContacts.map(convertContact);
+    store.bulkUpsertContacts(rows);
     log("contacts", `+${newContacts.length} (total: ${store.countContacts()})`);
+    if (rows.length > 0) bridge?.onContactUpdate(rows[0]!);
   });
 
   sock.ev.on("contacts.update", (updates) => {
-    store.bulkUpsertContacts(updates.map(convertContact));
+    const rows = updates.map(convertContact);
+    store.bulkUpsertContacts(rows);
+    if (rows.length > 0) bridge?.onContactUpdate(rows[0]!);
   });
 
-  // Chats
+  // Chats — call bridge once per batch
   sock.ev.on("chats.upsert", (newChats) => {
-    store.bulkUpsertChats(newChats.map(convertChat));
+    const rows = newChats.map(convertChat);
+    store.bulkUpsertChats(rows);
+    if (rows.length > 0) bridge?.onChatUpdate(rows[0]!);
   });
 
   sock.ev.on("chats.update", (updates) => {
-    store.bulkUpsertChats(updates.map(convertChat));
+    const rows = updates.map(convertChat);
+    store.bulkUpsertChats(rows);
+    if (rows.length > 0) bridge?.onChatUpdate(rows[0]!);
   });
 
   // Messages — real-time
-  sock.ev.on("messages.upsert", ({ messages, type }) => {
-    for (const msg of messages) {
+  sock.ev.on("messages.upsert", ({ messages: msgs, type }) => {
+    for (const msg of msgs) {
       const row = convertMessage(msg);
       if (!row) continue;
 
@@ -172,16 +179,17 @@ export function registerHandlers(sock: WASocket, store: StoreQueries) {
 
       store.insertMessage(row);
 
-      // Update chat's last message timestamp
-      if (msg.key.remoteJid) {
+      const chatJid = msg.key.remoteJid;
+      if (chatJid) {
         store.upsertChat({
-          jid: msg.key.remoteJid,
+          jid: chatJid,
           last_msg_ts: row.timestamp,
-          is_group: msg.key.remoteJid.endsWith("@g.us") ? 1 : 0,
+          is_group: chatJid.endsWith("@g.us") ? 1 : 0,
         });
+        // onNewMessage already calls refreshChats, no need for separate onChatUpdate
+        bridge?.onNewMessage(row, chatJid);
       }
 
-      // Log non-protocol messages
       const name = msg.pushName ? ` (${msg.pushName})` : "";
       const textPreview = row.text ? `: ${row.text.slice(0, 60)}` : "";
       log("msg", `${row.type} from ${row.sender_jid ?? "me"}${name}${textPreview}`);
@@ -193,6 +201,7 @@ export function registerHandlers(sock: WASocket, store: StoreQueries) {
     for (const { key, update } of updates) {
       if (key.id && update.status != null) {
         store.updateMessageStatus(key.id, update.status);
+        bridge?.onStatusUpdate(key.id, update.status);
       }
     }
   });

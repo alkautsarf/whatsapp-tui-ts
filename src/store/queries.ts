@@ -318,13 +318,15 @@ export function initQueries(db: DbInstances): StoreQueries {
     },
 
     resolveContactName(jid) {
-      // Try by JID first, then by LID
-      const byJid = resolveNameStmt.get(jid)?.resolved;
-      if (byJid && byJid !== jid) return byJid;
+      // For LID JIDs, check the lid column FIRST — the real contact
+      // (with address book name) links via contacts.lid = @lid JID
       if (jid.endsWith("@lid")) {
         const byLid = resolveNameByLidStmt.get(jid)?.resolved;
         if (byLid) return byLid;
       }
+      // Then try direct JID lookup
+      const byJid = resolveNameStmt.get(jid)?.resolved;
+      if (byJid && byJid !== jid) return byJid;
       return jid.split("@")[0];
     },
 

@@ -17,10 +17,14 @@ bun install
 bun run start
 ```
 
-On first run, scan the QR code with WhatsApp (Linked Devices). Session persists across restarts.
+On first run, scan the QR code inside the TUI. Session persists across restarts.
 
-## Current Status (Phase 1 — Data Layer)
+For the debug REPL (Phase 1): `bun run start:repl`
 
-- Full history sync: contacts, chats, messages stored in SQLite
-- Zero data loss during sync
-- REPL for verification: `chats`, `msgs <jid>`, `contacts`, `groups`, `send`, `stats`
+## Current Status (Phase 2 — TUI Shell)
+
+- Full terminal UI with OpenTUI + SolidJS: split layout, vim keybindings, message bubbles
+- Real-time messaging: send/receive with delivery receipts
+- Chat list with j/k navigation, search (/) and command palette (Ctrl+P)
+- NORMAL/INSERT/SEARCH vim modes with contextual key hints
+- Phase 1 data layer: full history sync, SQLite storage, zero data loss
