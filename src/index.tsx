@@ -346,6 +346,12 @@ async function runTui() {
 
 // ── Entry Point ─────────────────────────────────────────────────────
 
+import pkg from "../package.json";
+if (process.argv.includes("--version") || process.argv.includes("-v")) {
+  console.log(`whatsapp-tui v${pkg.version}`);
+  process.exit(0);
+}
+
 const isRepl = process.argv.includes("--repl");
 
 (isRepl ? runRepl() : runTui()).catch((e) => {
