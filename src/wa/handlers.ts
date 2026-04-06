@@ -6,6 +6,7 @@ import {
 import type { StoreQueries, ContactRow, ChatRow, MessageRow } from "../store/queries.ts";
 import type { ReactiveBridge } from "../ui/state.tsx";
 import { log, warn } from "../utils/log.ts";
+import { cacheRawMessage } from "./media.ts";
 
 // ── Converters ──────────────────────────────────────────────────────
 
@@ -58,6 +59,8 @@ const MEDIA_TYPES = new Set([
 
 const SKIP_MESSAGE_TYPES = new Set([
   "protocolMessage", "senderKeyDistributionMessage",
+  "associatedChildMessage", "reactionMessage", "pollUpdateMessage",
+  "editedMessage", "keepInChatMessage",
 ]);
 
 function convertMessage(msg: WAMessage): MessageRow | null {
@@ -73,6 +76,8 @@ function convertMessage(msg: WAMessage): MessageRow | null {
     (contentType === "conversation" ? (msg.message as any)?.conversation : null) ??
     null;
 
+  const isMedia = contentType && MEDIA_TYPES.has(contentType);
+
   return {
     id: msg.key.id,
     chat_jid: msg.key.remoteJid,
@@ -81,8 +86,19 @@ function convertMessage(msg: WAMessage): MessageRow | null {
     timestamp: toTimestampRequired(msg.messageTimestamp),
     type: contentType ?? "unknown",
     text,
-    media_type: contentType && MEDIA_TYPES.has(contentType) ? contentType : null,
+    media_type: isMedia ? contentType : null,
     media_path: null,
+    media_key: isMedia && content?.mediaKey ? Buffer.from(content.mediaKey).toString("base64") : null,
+    direct_path: isMedia ? (content?.directPath ?? null) : null,
+    media_url: isMedia ? (content?.url ?? null) : null,
+    mimetype: isMedia ? (content?.mimetype ?? null) : null,
+    file_name: content?.fileName ?? null,
+    file_size: content?.fileLength ? Number(content.fileLength) : null,
+    width: content?.width ?? null,
+    height: content?.height ?? null,
+    thumbnail: content?.jpegThumbnail ? Buffer.from(content.jpegThumbnail).toString("base64")
+             : content?.pngThumbnail ? Buffer.from(content.pngThumbnail).toString("base64")
+             : null,
     quoted_id: content?.contextInfo?.stanzaId ?? null,
     status: msg.status ?? 0,
     push_name: msg.pushName ?? null,
@@ -90,6 +106,12 @@ function convertMessage(msg: WAMessage): MessageRow | null {
 }
 
 // ── Handler registration ────────────────────────────────────────────
+
+/** Resolve a JID to phone format if it's a LID JID */
+function resolveJid(jid: string, store: StoreQueries): string {
+  if (jid.endsWith("@lid")) return store.resolveLidToPhoneJid(jid);
+  return jid;
+}
 
 export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: ReactiveBridge) {
   // History sync — the big one
@@ -105,12 +127,14 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
     function tryConvertEntry(entry: any) {
       try {
         if (entry?.key?.id) {
+          if (entry.message) cacheRawMessage(entry);
           const row = convertMessage(entry);
           if (row) allMsgRows.push(row);
           return;
         }
         const msg = entry?.message ?? entry;
         if (!msg) return;
+        if (msg.message && msg.key?.id) cacheRawMessage(msg);
         const row = convertMessage(msg);
         if (row) allMsgRows.push(row);
       } catch (e) {
@@ -135,6 +159,12 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
       }
     }
 
+    // Resolve LID → phone JID for all messages before inserting
+    for (const row of allMsgRows) {
+      if (row.chat_jid.endsWith("@lid")) {
+        row.chat_jid = resolveJid(row.chat_jid, store);
+      }
+    }
     if (allMsgRows.length) store.bulkInsertMessages(allMsgRows);
 
     log("sync", `${contacts?.length ?? 0}C ${chats?.length ?? 0}Ch ${allMsgRows.length}M`);
@@ -172,22 +202,28 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
   // Messages — real-time
   sock.ev.on("messages.upsert", ({ messages: msgs, type }) => {
     for (const msg of msgs) {
+      // Cache raw WAMessage for media download (works for own + received)
+      if (msg.message && msg.key?.id) cacheRawMessage(msg);
+
       const row = convertMessage(msg);
       if (!row) continue;
 
       if (SKIP_MESSAGE_TYPES.has(row.type)) continue;
 
-      store.insertMessage(row);
-
-      const chatJid = msg.key.remoteJid;
-      if (chatJid) {
+      // Resolve LID → phone JID for proper chat association
+      const rawChatJid = msg.key.remoteJid;
+      if (rawChatJid) {
+        const chatJid = resolveJid(rawChatJid, store);
+        row.chat_jid = chatJid; // fix before inserting
+        store.insertMessage(row);
         store.upsertChat({
           jid: chatJid,
           last_msg_ts: row.timestamp,
           is_group: chatJid.endsWith("@g.us") ? 1 : 0,
         });
-        // onNewMessage already calls refreshChats, no need for separate onChatUpdate
         bridge?.onNewMessage(row, chatJid);
+      } else {
+        store.insertMessage(row);
       }
 
       const name = msg.pushName ? ` (${msg.pushName})` : "";

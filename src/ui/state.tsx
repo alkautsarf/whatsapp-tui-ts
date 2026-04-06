@@ -36,6 +36,8 @@ export interface AppStoreHelpers {
   setReplyTo(messageId: string | null): void;
   setSelectedMessageIndex(index: number): void;
   setHighlightedChatJid(jid: string | null): void;
+  setEncodedImage(msgId: string, data: { cols: number; rows: number; placeholders: string; fgHex: string; imageId: number }): void;
+  clearEncodedImages(): void;
   createBridge(): ReactiveBridge;
 }
 
@@ -54,6 +56,7 @@ const INITIAL_STORE: AppStore = {
   replyToMessageId: null,
   typingJids: {},
   presenceMap: {},
+  encodedImages: {},
 };
 
 export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFunction<AppStore>, AppStoreHelpers] {
@@ -117,6 +120,8 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
     setReplyTo(messageId) { setStore("replyToMessageId", messageId); },
     setSelectedMessageIndex(index) { setStore("selectedMessageIndex", index); },
     setHighlightedChatJid(jid) { setStore("highlightedChatJid", jid); },
+    setEncodedImage(msgId, data) { setStore("encodedImages", msgId, data); },
+    clearEncodedImages() { setStore("encodedImages", {}); },
 
     createBridge(): ReactiveBridge {
       return {

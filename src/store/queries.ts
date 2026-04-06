@@ -34,6 +34,15 @@ export interface MessageRow {
   text?: string | null;
   media_type?: string | null;
   media_path?: string | null;
+  media_key?: string | null;
+  direct_path?: string | null;
+  media_url?: string | null;
+  mimetype?: string | null;
+  file_name?: string | null;
+  file_size?: number | null;
+  width?: number | null;
+  height?: number | null;
+  thumbnail?: string | null;
   quoted_id?: string | null;
   status: number;
   push_name?: string | null;
@@ -51,6 +60,7 @@ export interface StoreQueries {
   upsertChat(c: ChatRow): void;
   insertMessage(m: MessageRow): void;
   updateMessageStatus(id: string, status: number): void;
+  updateMediaPath(id: string, path: string): void;
   upsertGroupParticipants(groupJid: string, participants: GroupParticipantRow[]): void;
   removeGroupParticipants(groupJid: string, userJids: string[]): void;
   bulkUpsertContacts(contacts: ContactRow[]): void;
@@ -66,6 +76,7 @@ export interface StoreQueries {
   resolveContactName(jid: string): string;
   searchContacts(query: string): ContactRow[];
   getGroupParticipants(groupJid: string): GroupParticipantRow[];
+  resolveLidToPhoneJid(lidJid: string): string;
   countContacts(): number;
   countChats(): number;
   countMessages(): number;
@@ -113,12 +124,18 @@ export function initQueries(db: DbInstances): StoreQueries {
   const insertMsgStmt = writer.prepare(`
     INSERT OR REPLACE INTO messages
       (id, chat_jid, sender_jid, from_me, timestamp, type, text,
-       media_type, media_path, quoted_id, status, push_name)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+       media_type, media_path, media_key, direct_path, media_url,
+       mimetype, file_name, file_size, width, height, thumbnail,
+       quoted_id, status, push_name)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
   `);
 
   const updateStatusStmt = writer.prepare(`
     UPDATE messages SET status = ?1 WHERE id = ?2
+  `);
+
+  const updateMediaPathStmt = writer.prepare(`
+    UPDATE messages SET media_path = ?1 WHERE id = ?2
   `);
 
   const upsertParticipantStmt = writer.prepare(`
@@ -154,7 +171,9 @@ export function initQueries(db: DbInstances): StoreQueries {
 
   const getMessagesStmt = reader.prepare<MessageRow, [string, string, number, number]>(`
     SELECT id, chat_jid, sender_jid, from_me, timestamp, type, text,
-           media_type, media_path, quoted_id, status, push_name
+           media_type, media_path, media_key, direct_path, media_url,
+           mimetype, file_name, file_size, width, height, thumbnail,
+           quoted_id, status, push_name
     FROM messages
     WHERE (chat_jid = ?1 OR chat_jid = ?2)
       AND (?3 = 0 OR timestamp < ?3)
@@ -214,6 +233,27 @@ export function initQueries(db: DbInstances): StoreQueries {
     return getLidJidStmt.get(chatJid)?.lid_jid ?? chatJid;
   }
 
+  // ── Helper: resolve @lid JID → phone @s.whatsapp.net JID ──────
+
+  const lidToPhoneStmt = reader.prepare<{ jid: string }, [string]>(`
+    SELECT c.jid FROM chats c WHERE c.lid_jid = ?1 AND c.jid NOT LIKE '%@lid' LIMIT 1
+  `);
+
+  const lidToPhoneContactStmt = reader.prepare<{ jid: string }, [string]>(`
+    SELECT c.jid FROM contacts c WHERE c.lid = ?1 AND c.jid LIKE '%@s.whatsapp.net' LIMIT 1
+  `);
+
+  function resolveLidToPhone(lidJid: string): string {
+    if (!lidJid.endsWith("@lid")) return lidJid;
+    // Try chats table first (lid_jid column)
+    const fromChat = lidToPhoneStmt.get(lidJid);
+    if (fromChat) return fromChat.jid;
+    // Try contacts table (lid column)
+    const fromContact = lidToPhoneContactStmt.get(lidJid);
+    if (fromContact) return fromContact.jid;
+    return lidJid;
+  }
+
   // ── Internal helpers ────────────────────────────────────────────
 
   const CHUNK = 1500;
@@ -258,6 +298,15 @@ export function initQueries(db: DbInstances): StoreQueries {
       m.text != null ? String(m.text) : null,
       m.media_type != null ? String(m.media_type) : null,
       m.media_path != null ? String(m.media_path) : null,
+      m.media_key ?? null,
+      m.direct_path ?? null,
+      m.media_url ?? null,
+      m.mimetype ?? null,
+      m.file_name ?? null,
+      m.file_size ?? null,
+      m.width ?? null,
+      m.height ?? null,
+      m.thumbnail ?? null,
       m.quoted_id != null ? String(m.quoted_id) : null,
       Number(m.status) || 0,
       m.push_name != null ? String(m.push_name) : null
@@ -277,6 +326,10 @@ export function initQueries(db: DbInstances): StoreQueries {
 
     updateMessageStatus(id, status) {
       updateStatusStmt.run(status, id);
+    },
+
+    updateMediaPath(id, path) {
+      updateMediaPathStmt.run(path, id);
     },
 
     upsertGroupParticipants(groupJid, participants) {
@@ -355,6 +408,9 @@ export function initQueries(db: DbInstances): StoreQueries {
     },
     countMessages() {
       return countMessagesStmt.get()?.c ?? 0;
+    },
+    resolveLidToPhoneJid(lidJid: string) {
+      return resolveLidToPhone(lidJid);
     },
   };
 }

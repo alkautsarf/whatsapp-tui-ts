@@ -1,5 +1,7 @@
 import { Show, createMemo } from "solid-js";
 import { useTheme, type Theme } from "../theme.tsx";
+import { useAppStore } from "../state.tsx";
+import { IMAGE_MEDIA_TYPES } from "../image.ts";
 import type { MessageRow } from "../../store/queries.ts";
 
 function senderColorFromName(name: string, colors: string[]): string {
@@ -65,7 +67,14 @@ export interface BubbleProps {
 
 export function MessageBubble(props: BubbleProps) {
   const theme = useTheme();
+  const { store } = useAppStore();
   const isOwn = () => props.message.from_me === 1;
+
+  const imageData = () => {
+    const mt = props.message.media_type ?? props.message.type;
+    if (!IMAGE_MEDIA_TYPES.has(mt)) return null;
+    return store.encodedImages[props.message.id] ?? null;
+  };
   const bubbleBg = () => {
     if (props.isSelected) return theme.bgMessageSelected;
     return isOwn() ? theme.bgBubbleOwn : theme.bgBubbleOther;
@@ -127,9 +136,24 @@ export function MessageBubble(props: BubbleProps) {
               <text fg={nameColor()}>{props.senderName}</text>
             </box>
           </Show>
-          <Show when={contentLineCount() > 0}>
+          {/* Inline image (Kitty virtual placement) */}
+          <Show when={imageData()}>
+            {(img) => (
+              <box height={img().rows} width={img().cols}>
+                <text fg={img().fgHex}>{img().placeholders}</text>
+              </box>
+            )}
+          </Show>
+          {/* Text content (or media label if no image data yet) */}
+          <Show when={contentLineCount() > 0 && !imageData()}>
             <box height={contentLineCount()}>
               <text fg={theme.text}>{contentText()}</text>
+            </box>
+          </Show>
+          {/* Caption below image */}
+          <Show when={imageData() && props.message.text}>
+            <box height={1}>
+              <text fg={theme.text}>{props.message.text!}</text>
             </box>
           </Show>
           <box height={1} flexDirection="row" justifyContent="flex-end" gap={1}>

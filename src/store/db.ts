@@ -7,7 +7,7 @@ export interface DbInstances {
   reader: Database;
 }
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS contacts (
@@ -43,6 +43,15 @@ CREATE TABLE IF NOT EXISTS messages (
   text       TEXT,
   media_type TEXT,
   media_path TEXT,
+  media_key  TEXT,
+  direct_path TEXT,
+  media_url  TEXT,
+  mimetype   TEXT,
+  file_name  TEXT,
+  file_size  INTEGER,
+  width      INTEGER,
+  height     INTEGER,
+  thumbnail  TEXT,
   quoted_id  TEXT,
   status     INTEGER NOT NULL DEFAULT 0,
   push_name  TEXT
@@ -83,6 +92,22 @@ function migrate(writer: Database) {
     .query<{ version: number }, []>("SELECT version FROM schema_version LIMIT 1")
     .get();
   const current = row?.version ?? 0;
+
+  if (current < 2) {
+    const addCol = (col: string, type: string) => {
+      try { writer.run(`ALTER TABLE messages ADD COLUMN ${col} ${type}`); } catch {}
+    };
+    addCol("media_key", "TEXT");
+    addCol("direct_path", "TEXT");
+    addCol("media_url", "TEXT");
+    addCol("mimetype", "TEXT");
+    addCol("file_name", "TEXT");
+    addCol("file_size", "INTEGER");
+    addCol("width", "INTEGER");
+    addCol("height", "INTEGER");
+    addCol("thumbnail", "TEXT");
+  }
+
   if (current < SCHEMA_VERSION) {
     writer.run("UPDATE schema_version SET version = ?", [SCHEMA_VERSION]);
   }

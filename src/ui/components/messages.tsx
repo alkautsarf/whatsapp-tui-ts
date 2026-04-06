@@ -2,6 +2,7 @@ import { For, Show, createMemo } from "solid-js";
 import { useAppStore } from "../state.tsx";
 import { useTheme } from "../theme.tsx";
 import { MessageBubble, type BubbleProps } from "./message-bubble.tsx";
+import { HIDDEN_MESSAGE_TYPES as HIDDEN_TYPES } from "../image.ts";
 import type { StoreQueries, MessageRow } from "../../store/queries.ts";
 
 interface GroupedMessage {
@@ -34,8 +35,7 @@ export function Messages(props: { queries: StoreQueries; scrollRef?: (el: any) =
     const raw = store.messages[jid];
     if (!raw || raw.length === 0) return [];
 
-    // Messages are stored newest-first, reverse for display (oldest first)
-    const msgs = [...raw].reverse();
+    const msgs = raw.filter(m => !HIDDEN_TYPES.has(m.type)).reverse();
     const result: GroupedMessage[] = [];
 
     for (let i = 0; i < msgs.length; i++) {
@@ -105,14 +105,23 @@ export function Messages(props: { queries: StoreQueries; scrollRef?: (el: any) =
           >
             <For each={groupedMessages()}>
               {(item, idx) => (
+                <box id={`msg-${item.message.id}`}>
                 <MessageBubble
                   message={item.message}
                   showSender={item.showSender}
                   showDate={item.showDate}
                   senderName={item.senderName}
                   quotedText={item.quotedText}
-                  isSelected={isFocused() && idx() === (groupedMessages().length - 1 - store.selectedMessageIndex)}
+                  isSelected={isFocused() && (() => {
+                    const jid = store.selectedChatJid;
+                    if (!jid) return false;
+                    const raw = store.messages[jid];
+                    if (!raw) return false;
+                    const selectedMsg = raw[store.selectedMessageIndex];
+                    return selectedMsg?.id === item.message.id;
+                  })()}
                 />
+                </box>
               )}
             </For>
           </scrollbox>

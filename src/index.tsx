@@ -320,8 +320,8 @@ async function runTui() {
   function quit() {
     // Destroy renderer first to restore terminal state
     try { renderer.destroy(); } catch {}
-    // Restore terminal manually as fallback
-    process.stdout.write("\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[0m");
+    // Restore terminal fully — clear alt screen + any image artifacts
+    process.stdout.write("\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[0m\x1b[2J\x1b[H");
     try { client.sock?.end?.(undefined); } catch {}
     closeDb(db);
     process.exit(0);
@@ -334,6 +334,7 @@ async function runTui() {
           <App
             queries={queries}
             getSock={() => currentSock}
+            getRenderer={() => renderer}
             onQuit={quit}
           />
         </ThemeProvider>

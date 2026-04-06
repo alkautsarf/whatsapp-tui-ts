@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-tui-ts",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "module": "src/index.ts",
   "type": "module",
   "private": true,
@@ -21,6 +21,7 @@
     "@opentui/core": "^0.1.97",
     "@opentui/solid": "^0.1.97",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "phosphor-cli": "^0.2.0",
     "pino": "^10.3.1",
     "qrcode-generator": "^2.0.4",
     "qrcode-terminal": "^0.12.0",

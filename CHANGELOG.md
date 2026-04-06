@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-04-06
+
+### Added
+
+- Inline image rendering via Kitty graphics protocol with phosphor-cli integration
+- Full-resolution image download from WhatsApp servers using stored media keys
+- Full-view image overlay: press Enter on image message, Esc to return
+- Sticker inline rendering (WebP via phosphor/sharp)
+- Media metadata persistence: media_key, direct_path, mimetype, dimensions, thumbnail stored in DB
+- LID→phone JID resolution for outgoing messages (fixes messages going to wrong chat)
+- `scrollChildIntoView` for reliable message cursor tracking across all message types
+- Media download cache with `data/media/` directory and DB path tracking
+- Hidden message type filter: protocol, reaction, poll, edit messages hidden from display
+
+### Changed
+
+- DB schema v2: 9 new columns on messages table for media metadata
+- Message scroll uses OpenTUI's native `scrollChildIntoView` instead of estimated `scrollBy`
+- Image transmit uses OpenTUI's `setFrameCallback` for zero-interleave DCS writes
+- Navigation: `h` from input goes to messages (not chat list), `l` from input goes to messages
+- Quit clears Kitty images and resets terminal fully
+
+### Fixed
+
+- Cursor indicator matching by message ID instead of array index (immune to hidden message filtering)
+- `gg` then `k` no longer triggers repeated `loadMoreMessages` jumps
+- Scroll-to-bottom on message send now actually scrolls the scrollbox
+
 ## [0.2.3] - 2026-04-06
 
 ### Changed
@@ -98,6 +126,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.3.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.3.0
 [0.2.3]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.2.3
 [0.2.2]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.2.2
 [0.2.1]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.2.1

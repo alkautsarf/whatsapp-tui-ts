@@ -18,6 +18,7 @@ export function useAppKeyboard(actions: {
   onScrollMessagesPage: (dir: number) => void;
   onYankMessage: () => void;
   onReply: () => void;
+  onOpenImage?: () => void;
 }) {
   const { store, helpers } = useAppStore();
 
@@ -175,19 +176,25 @@ export function useAppKeyboard(actions: {
       return;
     }
 
-    // Open chat / enter messages
+    // Open chat / enter messages / open image
     if (evt.name === "return" || evt.name === "l") {
       if (store.focusZone === "chat-list") {
         actions.onSelectChat();
         helpers.setFocusZone("messages");
+      } else if (store.focusZone === "input" && evt.name === "l") {
+        helpers.setFocusZone("messages");
+      } else if (store.focusZone === "messages" && evt.name === "return" && actions.onOpenImage) {
+        actions.onOpenImage();
       }
       return;
     }
 
     // Back to chat list
     if (evt.name === "h") {
-      if (store.focusZone === "messages" || store.focusZone === "input") {
+      if (store.focusZone === "messages") {
         helpers.setFocusZone("chat-list");
+      } else if (store.focusZone === "input") {
+        helpers.setFocusZone("messages");
       }
       return;
     }

@@ -21,6 +21,14 @@ export interface OverlayState {
   type: OverlayType;
 }
 
+export interface EncodedImageData {
+  cols: number;
+  rows: number;
+  placeholders: string;
+  fgHex: string;
+  imageId: number;
+}
+
 export interface AppStore {
   chats: ChatRow[];
   messages: Record<string, MessageRow[]>;
@@ -34,4 +42,5 @@ export interface AppStore {
   replyToMessageId: string | null;
   typingJids: Record<string, number>;
   presenceMap: Record<string, string>;
+  encodedImages: Record<string, EncodedImageData>;
 }
