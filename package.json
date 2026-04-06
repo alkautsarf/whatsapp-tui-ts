@@ -11,6 +11,9 @@
   "files": [
     "bin/",
     "src/",
+    "tsconfig.json",
+    "bunfig.toml",
+    "ws-override.ts",
     "package.json",
     "README.md"
   ],

@@ -1,2 +1,4 @@
-#!/usr/bin/env bun
-import "../src/index.tsx";
+#!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "${SCRIPT_DIR}"
+exec bun run src/index.tsx "$@"

@@ -23,21 +23,21 @@ echo "Building ${TARBALL}..."
 rm -rf dist
 mkdir -p "${DIST}/bin" "${DIST}/src" "${DIST}/node_modules"
 
-# Copy source
+# Copy source + config
 cp -r src/ "${DIST}/src/"
-cp package.json "${DIST}/"
-cp README.md "${DIST}/"
+cp package.json tsconfig.json bunfig.toml ws-override.ts README.md "${DIST}/"
 
 # Install production deps only
 cd "${DIST}"
 bun install --production --frozen-lockfile 2>/dev/null || bun install --production
 cd -
 
-# Create wrapper script
+# Create wrapper script — must cd to SCRIPT_DIR so bun finds tsconfig.json/bunfig.toml
 cat > "${DIST}/bin/wa" << 'WRAPPER'
 #!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-exec bun run "${SCRIPT_DIR}/src/index.tsx" "$@"
+cd "${SCRIPT_DIR}"
+exec bun run src/index.tsx "$@"
 WRAPPER
 chmod +x "${DIST}/bin/wa"
 
