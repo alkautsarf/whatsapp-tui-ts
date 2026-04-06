@@ -1,14 +1,31 @@
 {
   "name": "whatsapp-tui-ts",
   "version": "0.4.0",
-  "module": "src/index.ts",
+  "description": "WhatsApp TUI client with vim keybindings",
+  "module": "src/index.tsx",
   "type": "module",
-  "private": true,
+  "bin": {
+    "wa": "bin/wa",
+    "watui": "bin/wa"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "package.json",
+    "README.md"
+  ],
   "scripts": {
     "start": "bun run src/index.tsx",
     "start:repl": "bun run src/index.tsx --repl",
     "test:harness": "bun run test.ts"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alkautsarf/whatsapp-tui-ts.git"
+  },
+  "keywords": ["whatsapp", "tui", "terminal", "vim", "chat"],
+  "author": "elpabl0",
+  "license": "MIT",
   "devDependencies": {
     "@types/bun": "latest",
     "tsx": "^4.21.0"
