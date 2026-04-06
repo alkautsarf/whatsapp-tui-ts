@@ -10,18 +10,24 @@ WhatsApp TUI client with vim keybindings — TypeScript rewrite.
 - **TUI**: OpenTUI + SolidJS (Phase 2)
 - **Images**: [phosphor-cli](https://github.com/alkautsarf/phosphor) (Phase 4)
 
-## Setup
+## Install
 
 ```bash
-bun install
-bun run start
+# Homebrew (macOS)
+brew install alkautsarf/tap/whatsapp-tui
+
+# npm (requires bun)
+bun install -g whatsapp-tui-ts
+
+# From source
+bun install && bun run start
 ```
 
-On first run, scan the QR code inside the TUI. Session persists across restarts.
+Run `wa` or `watui` to start. On first run, scan the QR code inside the TUI.
 
-For the debug REPL (Phase 1): `bun run start:repl`
+Data stored at `~/.local/share/whatsapp-tui/` (auth, database, media, logs).
 
-## Current Status (v0.4.0)
+## Current Status (v0.4.2)
 
 - Full terminal UI with OpenTUI + SolidJS: split layout, vim keybindings, message bubbles
 - Real-time messaging: send/receive with delivery receipts and read status

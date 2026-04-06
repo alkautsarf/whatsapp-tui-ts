@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.2] - 2026-04-06
+
+### Added
+
+- `--version` / `-v` flag for CLI version check
+
+### Changed
+
+- Auth, database, media, and logs now stored in `~/.local/share/whatsapp-tui/` instead of relative `./data/` and `./auth_state/`
+- Session and data persist across brew upgrades and work from any directory
+
 ## [0.4.0] - 2026-04-06
 
 ### Added
@@ -158,6 +169,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.4.2]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.2
 [0.4.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.0
 [0.3.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.3.0
 [0.2.3]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.2.3

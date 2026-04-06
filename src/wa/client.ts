@@ -13,6 +13,7 @@ import pino from "pino";
 import qrcode from "qrcode-terminal";
 import { existsSync } from "fs";
 import { log, ok, warn, err } from "../utils/log.ts";
+import { AUTH_DIR } from "../utils/paths.ts";
 
 export interface WaClient {
   sock: WASocket;
@@ -37,7 +38,7 @@ function initClientCore(options: ClientOptions): {
   connectedPromise: Promise<void>;
   start: () => Promise<void>;
 } {
-  const authDir = options.authDir ?? "./auth_state";
+  const authDir = options.authDir ?? AUTH_DIR;
   const logLevel = options.logLevel ?? "silent";
 
   const hasSession = existsSync(`${authDir}/creds.json`);

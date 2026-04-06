@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "fs";
 import { dirname } from "path";
+import { DB_PATH } from "../utils/paths.ts";
 
 export interface DbInstances {
   writer: Database;
@@ -113,7 +114,7 @@ function migrate(writer: Database) {
   }
 }
 
-export function initDb(dbPath = "./data/app.db"): DbInstances {
+export function initDb(dbPath = DB_PATH): DbInstances {
   mkdirSync(dirname(dbPath), { recursive: true });
 
   const writer = new Database(dbPath, { strict: true });

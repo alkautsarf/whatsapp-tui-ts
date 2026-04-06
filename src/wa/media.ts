@@ -1,9 +1,8 @@
 import { downloadMediaMessage, downloadContentFromMessage, type WAMessage, type WASocket, type MediaType } from "@whiskeysockets/baileys";
 import { mkdirSync, existsSync, writeFileSync } from "fs";
 import { log, warn } from "../utils/log.ts";
+import { MEDIA_DIR } from "../utils/paths.ts";
 import type { MessageRow } from "../store/queries.ts";
-
-const MEDIA_DIR = "./data/media";
 
 let mediaDirEnsured = false;
 export function ensureMediaDir() {

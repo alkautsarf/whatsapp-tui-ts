@@ -5,6 +5,7 @@ import { registerHandlers } from "./wa/handlers.ts";
 import { createInterface } from "readline";
 import { existsSync } from "fs";
 import { log, ok, warn, err } from "./utils/log.ts";
+import { AUTH_DIR, LOG_PATH } from "./utils/paths.ts";
 import type { WASocket } from "@whiskeysockets/baileys";
 
 // ── REPL (Phase 1 — preserved as --repl fallback) ─────────────────
@@ -240,10 +241,10 @@ async function runRepl() {
   const store = initQueries(db);
   ok("init", "SQLite initialized (WAL mode)");
 
-  const hasAuth = existsSync("./auth_state/creds.json");
+  const hasAuth = existsSync(`${AUTH_DIR}/creds.json`);
   const hasData = store.countChats() > 0;
   if (hasAuth && !hasData) {
-    warn("init", "Auth state exists but DB is empty — delete auth_state/ and data/ together, then re-scan QR.");
+    warn("init", `Auth state exists but DB is empty — delete ${AUTH_DIR}/ and re-scan QR.`);
   }
 
   const client = await createClient({
@@ -278,7 +279,7 @@ async function runTui() {
   const { App } = await import("./ui/app.tsx");
 
   // Mute console logs — TUI owns the terminal; log to file instead
-  setLogFile("./data/tui.log");
+  setLogFile(LOG_PATH);
   muteLog();
 
   const db = initDb();
