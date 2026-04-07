@@ -181,13 +181,27 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
 
   // Chats — call bridge once per batch
   sock.ev.on("chats.upsert", (newChats) => {
-    const rows = newChats.map(convertChat);
+    const rows = newChats.map((c) => {
+      const row = convertChat(c);
+      // Normalize LID-keyed chat updates to the canonical phone-jid row.
+      // baileys post-sync pushes chat updates keyed by `<id>@lid` for known
+      // contacts as part of WhatsApp's LID privacy rollout. Without this
+      // line we'd create phantom duplicate rows that show up as a separate
+      // entry in the chat list, alongside the real phone-jid row. Mirrors
+      // what messages.upsert already does.
+      row.jid = resolveJid(row.jid, store);
+      return row;
+    });
     store.bulkUpsertChats(rows);
     if (rows.length > 0) bridge?.onChatUpdate(rows[0]!);
   });
 
   sock.ev.on("chats.update", (updates) => {
-    const rows = updates.map(convertChat);
+    const rows = updates.map((c) => {
+      const row = convertChat(c);
+      row.jid = resolveJid(row.jid, store);
+      return row;
+    });
     store.bulkUpsertChats(rows);
     if (rows.length > 0) bridge?.onChatUpdate(rows[0]!);
   });

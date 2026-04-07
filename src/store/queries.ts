@@ -161,6 +161,15 @@ export function initQueries(db: DbInstances): StoreQueries {
 
   // ── Read statements ───────────────────────────────────────────
 
+  // Note: the dedup filter for LID rows checks BOTH:
+  //   1. chats.lid_jid back-reference (preferred — explicit link on the
+  //      canonical phone row, set when baileys delivered lidJid/accountLid
+  //      in the chat object)
+  //   2. contacts.lid fallback (catches the case where baileys did NOT
+  //      include lidJid in the chat metadata but the contacts table knows
+  //      the LID → phone mapping from a separate contacts.upsert event)
+  // The contacts.lid fallback is what closes the gap on installs where
+  // chats.lid_jid is under-populated (e.g. christopher's 30% leakage).
   const listChatsStmt = reader.prepare<ChatRow, [number]>(`
     SELECT c.jid, c.name,
       COALESCE(
@@ -177,8 +186,17 @@ export function initQueries(db: DbInstances): StoreQueries {
     FROM chats c
     WHERE c.archived = 0
       AND c.jid != 'status@broadcast'
-      AND NOT (c.jid LIKE '%@lid' AND EXISTS (
-        SELECT 1 FROM chats c2 WHERE c2.lid_jid = c.jid AND c2.jid NOT LIKE '%@lid'
+      AND NOT (c.jid LIKE '%@lid' AND (
+        EXISTS (
+          SELECT 1 FROM chats c2
+          WHERE c2.lid_jid = c.jid AND c2.jid NOT LIKE '%@lid'
+        )
+        OR EXISTS (
+          SELECT 1 FROM contacts ct
+          WHERE ct.lid = c.jid
+            AND ct.jid LIKE '%@s.whatsapp.net'
+            AND EXISTS (SELECT 1 FROM chats cc WHERE cc.jid = ct.jid)
+        )
       ))
     ORDER BY c.pinned DESC, last_msg_ts DESC
     LIMIT ?1

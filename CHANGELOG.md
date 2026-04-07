@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.10] - 2026-04-07
+
+### Fixed
+
+- **LID chat-row duplication.** Reported by christopher (relayed via chilldawg): "messages don't appear post-history-sync." Root cause was duplicate chat list rows caused by WhatsApp's gradual LID privacy rollout — for contacts known by both phone JID and `<id>@lid`, baileys would push `chats.upsert` / `chats.update` events keyed by the LID, and wa-tui's handlers (unlike `messages.upsert`) didn't normalize the LID before insert. Result: a phantom LID-keyed chat row sitting next to the real phone-jid row in the chat list. christopher opened the LID twin → empty conversation → "messages dropped." Actually messages were arriving correctly under the canonical phone row he wasn't looking at.
+- **Two-line code fix in `src/wa/handlers.ts`:** call `resolveJid()` on each chat id in `chats.upsert` and `chats.update` before insert, mirroring what `messages.upsert` already does. Stops new phantoms from being created. Existing `resolveLidToPhone` helper has both `chats.lid_jid` and `contacts.lid` fallbacks, so the routing works whether or not baileys included `lidJid`/`accountLid` in the chat metadata.
+- **Smarter `listChats` dedup query in `src/store/queries.ts`:** the existing dedup filter only checked `chats.lid_jid` back-references, which meant LID twins leaked through whenever baileys hadn't populated `lidJid` on the phone row (christopher's case: 30% of his phone rows leaked their LID twin). The new filter also checks `contacts.lid` as a fallback, hiding existing leaked phantoms at query time. Read-only, self-healing — no migration needed, no data mutation, no DELETE.
+
+### Notes
+
+- **Diagnosis credit goes to chilldawg.** They ran the three-datapoint debug checklist on christopher's machine (tui.log onNewMessage events firing, app.db rows being inserted, WS connection ESTABLISHED) and pinpointed the LID dedup failure when my own initial theory of "baileys stuck post-sync" turned out to be wrong.
+- **Validation done before shipping.** Ran SQL on my own DB to verify the original "delete empty LID phantoms" cleanup plan was wrong — most LID rows on my install (30 of 37) are legitimate LID-only contacts with real messages, not phantoms. The original plan would have wiped 337 real messages. The shipped fix has zero DELETE statements.
+- **My install impact:** zero visible change. Already had 99.6% lid_jid populated, all 7 LID twins were already correctly hidden by the old filter.
+- **christopher impact (post manual cleanup + this upgrade):** new LID twins stop accumulating; any future leakage caught by the smarter dedup filter even without backfill.
+
 ## [0.4.9] - 2026-04-07
 
 ### Fixed
