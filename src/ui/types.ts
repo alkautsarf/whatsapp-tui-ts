@@ -34,6 +34,15 @@ export interface EncodedImageData {
   imageId: number;
 }
 
+export type ToastLevel = "error" | "info";
+
+export interface ToastState {
+  message: string;
+  level: ToastLevel;
+  /** epoch ms — toast auto-clears at or after this time */
+  expiresAt: number;
+}
+
 export interface AppStore {
   chats: ChatRow[];
   messages: Record<string, MessageRow[]>;
@@ -48,4 +57,5 @@ export interface AppStore {
   typingJids: Record<string, number>;
   presenceMap: Record<string, string>;
   encodedImages: Record<string, EncodedImageData>;
+  toast: ToastState | null;
 }

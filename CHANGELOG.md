@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.8] - 2026-04-07
+
+### Fixed
+
+- **Media send no longer crashes the TUI on oversized files.** Previously, attaching a file larger than WhatsApp's media limits (e.g., a 3.4 GB screen recording) would either OOM Bun trying to allocate the buffer or escape an unhandled `fs.WriteStream` construct→destroy stack trace from baileys' upload pipeline into the renderer, corrupting the display so badly the user had to quit the app. `sendMedia` now stat-checks file size BEFORE allocating the buffer, rejects oversized files with a clean toast, and wraps the entire pipeline in try/catch so any error from `statSync`, `readFile`, or `sock.sendMessage` is caught and surfaced as a toast instead of escaping.
+- **`MEDIA_SIZE_LIMITS_BYTES`** validated against WhatsApp's official limits (not assumed): images/videos/audio = 16 MB, stickers = 1 MB, documents = 2 GB on Web. Sources cited inline in `src/ui/layout.tsx`.
+
+### Added
+
+- **Toast UI in the status bar** for transient error/info messages. New `AppStore.toast` field, `helpers.showToast(message, level, durationMs?)`, and a status bar renderer that replaces the hints area with a colored toast (red for error, green for info) until it auto-clears. Used by the media send error handler — extensible for future error surfaces.
+- **`formatBytes()` helper** for human-readable file sizes in toast messages and logs.
+
+### Notes
+
+- Followup for v0.4.9: auto-compress videos > 16 MB via `ffmpeg` (matching what WhatsApp Web/app do client-side). Out of scope for this release — would have delayed shipping the urgent error-handling fix.
+
 ## [0.4.7] - 2026-04-07
 
 ### Added

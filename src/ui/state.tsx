@@ -40,6 +40,8 @@ export interface AppStoreHelpers {
   setHighlightedChatJid(jid: string | null): void;
   setEncodedImage(msgId: string, data: { cols: number; rows: number; placeholders: string; fgHex: string; imageId: number }): void;
   clearEncodedImages(): void;
+  showToast(message: string, level?: "error" | "info", durationMs?: number): void;
+  clearToast(): void;
   createBridge(): ReactiveBridge;
 }
 
@@ -59,6 +61,7 @@ const INITIAL_STORE: AppStore = {
   typingJids: {},
   presenceMap: {},
   encodedImages: {},
+  toast: null,
 };
 
 export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFunction<AppStore>, AppStoreHelpers] {
@@ -126,6 +129,21 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
     setHighlightedChatJid(jid) { setStore("highlightedChatJid", jid); },
     setEncodedImage(msgId, data) { setStore("encodedImages", msgId, data); },
     clearEncodedImages() { setStore("encodedImages", {}); },
+
+    showToast(message, level = "info", durationMs = 5000) {
+      const expiresAt = Date.now() + durationMs;
+      setStore("toast", { message, level, expiresAt });
+      // Schedule the auto-clear. We compare expiresAt before clearing so a
+      // newer toast that lands while the old one is still showing isn't
+      // wiped early by the previous timer.
+      setTimeout(() => {
+        if (store.toast && store.toast.expiresAt <= Date.now()) {
+          setStore("toast", null);
+        }
+      }, durationMs + 50);
+    },
+
+    clearToast() { setStore("toast", null); },
 
     createBridge(): ReactiveBridge {
       return {

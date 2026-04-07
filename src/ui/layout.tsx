@@ -1,5 +1,5 @@
 import { Show } from "solid-js";
-import { existsSync } from "fs";
+import { existsSync, statSync } from "fs";
 import { readFile } from "fs/promises";
 import { basename } from "path";
 import { useAppStore } from "./state.tsx";
@@ -17,13 +17,38 @@ import type { StoreQueries } from "../store/queries.ts";
 import type { WASocket } from "@whiskeysockets/baileys";
 import type { InputMethods } from "./types.ts";
 
-function mediaTypeFromExt(ext: string): "image" | "video" | "audio" | "document" | "sticker" {
+type MediaType = "image" | "video" | "audio" | "document" | "sticker";
+
+function mediaTypeFromExt(ext: string): MediaType {
   const e = ext.toLowerCase();
   if (["jpg", "jpeg", "png", "gif", "bmp", "heic", "heif"].includes(e)) return "image";
   if (["webp"].includes(e)) return "sticker";
   if (["mp4", "mov", "avi", "mkv", "webm", "3gp"].includes(e)) return "video";
   if (["mp3", "ogg", "wav", "opus", "m4a", "aac", "flac"].includes(e)) return "audio";
   return "document";
+}
+
+// Validated against WhatsApp's official limits — see README.md and the FAQ
+// at https://faq.whatsapp.com/239536730601513/?locale=en_US (videos) plus the
+// 2GB document announcement at
+// https://blog.whatsapp.com/reactions-2gb-file-sharing-512-groups
+//
+// Bytes, not MB — 1024-based.
+const MEDIA_SIZE_LIMITS_BYTES: Record<MediaType, number> = {
+  image:    16 * 1024 * 1024,         //  16 MB
+  video:    16 * 1024 * 1024,         //  16 MB (WhatsApp Web/app auto-compresses
+                                      //         client-side; baileys does NOT, so
+                                      //         we have to enforce the wire limit)
+  audio:    16 * 1024 * 1024,         //  16 MB
+  sticker:   1 * 1024 * 1024,         //   1 MB (WebP sticker spec)
+  document: 2 * 1024 * 1024 * 1024,   //   2 GB (WhatsApp Web only)
+};
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 export function Layout(props: {
@@ -95,34 +120,61 @@ export function Layout(props: {
   }
 
   async function sendMedia(sock: WASocket, jid: string, filePath: string, caption?: string) {
-    const ext = filePath.split(".").pop() ?? "";
-    const type = mediaTypeFromExt(ext);
-    const buffer = await readFile(filePath);
     const fileName = basename(filePath);
 
-    let content: any;
-    switch (type) {
-      case "image":
-        content = { image: buffer, caption };
-        break;
-      case "sticker":
-        content = { sticker: buffer };
-        break;
-      case "video":
-        content = { video: buffer, caption };
-        break;
-      case "audio":
-        content = { audio: buffer, ptt: false };
-        break;
-      case "document":
-        content = { document: buffer, fileName, caption };
-        break;
-    }
+    try {
+      const ext = filePath.split(".").pop() ?? "";
+      const type = mediaTypeFromExt(ext);
 
-    log("media", `Sending ${type}: ${fileName}`);
-    sock.sendMessage(jid, content).catch((e: Error) => {
-      log("media", `Send failed: ${e.message}`);
-    });
+      // Pre-validate file size BEFORE allocating a multi-GB buffer. Without
+      // this guard, a 3 GB video would either OOM Bun or crash deep inside
+      // baileys' upload pipeline (the fs WriteStream construct→destroy stack
+      // trace that escaped the renderer in v0.4.7 and earlier).
+      const stat = statSync(filePath);
+      const limit = MEDIA_SIZE_LIMITS_BYTES[type];
+      if (stat.size > limit) {
+        const msg = `${type} too large: ${formatBytes(stat.size)} (limit ${formatBytes(limit)})`;
+        log("media", `${msg} — ${fileName}`);
+        helpers.showToast(msg, "error", 8000);
+        return;
+      }
+
+      const buffer = await readFile(filePath);
+
+      let content: any;
+      switch (type) {
+        case "image":
+          content = { image: buffer, caption };
+          break;
+        case "sticker":
+          content = { sticker: buffer };
+          break;
+        case "video":
+          content = { video: buffer, caption };
+          break;
+        case "audio":
+          content = { audio: buffer, ptt: false };
+          break;
+        case "document":
+          content = { document: buffer, fileName, caption };
+          break;
+      }
+
+      log("media", `Sending ${type}: ${fileName} (${formatBytes(stat.size)})`);
+      try {
+        await sock.sendMessage(jid, content);
+      } catch (e) {
+        const msg = (e as Error)?.message ?? "unknown error";
+        log("media", `Send failed: ${msg}`);
+        helpers.showToast(`Failed to send ${type}: ${msg}`, "error", 8000);
+      }
+    } catch (e) {
+      // Catches statSync ENOENT/EACCES, readFile errors, anything else
+      // synchronous or async that escapes. Renderer never sees the throw.
+      const msg = (e as Error)?.message ?? "unknown error";
+      log("media", `Media send pipeline failed for ${fileName}: ${msg}`);
+      helpers.showToast(`Cannot send ${fileName}: ${msg}`, "error", 8000);
+    }
   }
 
   return (

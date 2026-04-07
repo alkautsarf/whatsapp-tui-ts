@@ -46,6 +46,17 @@ export function StatusBar() {
     }
   });
 
+  // Toast takes precedence over hints when active. Renders with error/info
+  // colored background so it's visually distinct from the muted hints.
+  const toastDisplay = createMemo(() => {
+    const t = store.toast;
+    if (!t) return null;
+    return {
+      message: t.message,
+      bg: t.level === "error" ? theme.error : theme.online,
+    };
+  });
+
   return (
     <box flexDirection="row" height={1} justifyContent="space-between">
       <box flexDirection="row" gap={1}>
@@ -56,7 +67,13 @@ export function StatusBar() {
           {" " + connectionDot().char}
         </text>
       </box>
-      <text fg={theme.textMuted}>{hints()}</text>
+      {toastDisplay() ? (
+        <text bg={toastDisplay()!.bg} fg="#000000" attributes={1}>
+          {" " + toastDisplay()!.message + " "}
+        </text>
+      ) : (
+        <text fg={theme.textMuted}>{hints()}</text>
+      )}
     </box>
   );
 }
