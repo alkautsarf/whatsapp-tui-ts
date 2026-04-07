@@ -12,6 +12,7 @@ import { StatusBar } from "./components/status-bar.tsx";
 import { SearchOverlay } from "./overlays/search.tsx";
 import { CommandPalette } from "./overlays/command-palette.tsx";
 import { log } from "../utils/log.ts";
+import { getRawMessage } from "../wa/media.ts";
 import type { StoreQueries } from "../store/queries.ts";
 import type { WASocket } from "@whiskeysockets/baileys";
 import type { InputMethods } from "./types.ts";
@@ -68,12 +69,24 @@ export function Layout(props: {
     const content: any = { text };
     const msgOpts: any = {};
     if (quotedId) {
-      const quoted = props.queries.getMessage(quotedId);
-      if (quoted) {
-        msgOpts.quoted = {
-          key: { remoteJid: jid, id: quotedId, fromMe: quoted.from_me === 1 },
-          message: { conversation: quoted.text || "" },
-        };
+      // Prefer the cached raw WAMessage — Baileys needs the full protobuf
+      // to build a valid contextInfo for media replies. Reconstructing from
+      // our flat MessageRow only produces a fake `conversation` (text), which
+      // the WA server can't match against image/video/sticker originals,
+      // making the reply silently fail or render as a broken empty quote.
+      const rawQuoted = getRawMessage(quotedId);
+      if (rawQuoted) {
+        msgOpts.quoted = rawQuoted;
+      } else {
+        // LRU evicted the raw cache (>200 messages back). Fall back to the
+        // text-only stub — works for text replies, degrades for media.
+        const quoted = props.queries.getMessage(quotedId);
+        if (quoted) {
+          msgOpts.quoted = {
+            key: { remoteJid: jid, id: quotedId, fromMe: quoted.from_me === 1 },
+            message: { conversation: quoted.text || "" },
+          };
+        }
       }
     }
     sock.sendMessage(jid, content, msgOpts).catch(() => {});

@@ -35,7 +35,9 @@ export function isInTmux(): boolean {
   if (cachedTmux === null) {
     cachedTmux = !!process.env.TMUX;
     if (cachedTmux) {
-      try { execSync("tmux set -p allow-passthrough on", { stdio: "ignore" }); } catch {}
+      // Use "all" so DCS sequences pass through tmux popups too
+      // (popups are treated as invisible panes — "on" is not enough).
+      try { execSync("tmux set -p allow-passthrough all", { stdio: "ignore" }); } catch {}
     }
   }
   return cachedTmux;

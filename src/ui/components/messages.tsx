@@ -3,6 +3,7 @@ import { useAppStore } from "../state.tsx";
 import { useTheme } from "../theme.tsx";
 import { MessageBubble, type BubbleProps } from "./message-bubble.tsx";
 import { HIDDEN_MESSAGE_TYPES as HIDDEN_TYPES } from "../image.ts";
+import { mediaLabel } from "../../wa/message-types.ts";
 import type { StoreQueries, MessageRow } from "../../store/queries.ts";
 
 interface GroupedMessage {
@@ -59,11 +60,16 @@ export function Messages(props: { queries: StoreQueries; scrollRef?: (el: any) =
         ? "You"
         : props.queries.resolveContactName(msg.sender_jid || msg.chat_jid);
 
-      // Resolve quoted message text
+      // Resolve quoted message preview — text if available, else a media
+      // label so image/sticker/video replies still get a "> Photo" indicator.
       let quotedText: string | null = null;
       if (msg.quoted_id) {
         const quoted = props.queries.getMessageContent(msg.quoted_id);
         if (quoted?.text) quotedText = quoted.text;
+        else if (quoted) {
+          const label = mediaLabel(quoted.type);
+          if (label) quotedText = label;
+        }
       }
 
       result.push({ message: msg, showSender, showDate, senderName, quotedText });

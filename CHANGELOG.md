@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.4] - 2026-04-07
+
+### Fixed
+
+- Reply-to-image (and other media replies) now sends a proper quote — handler passes the cached raw `WAMessage` protobuf to Baileys instead of fabricating a `conversation` stub that the WA server couldn't match
+- Reply preview indicator now renders for media quotes — `> Photo`, `> Sticker`, `> Video`, etc., instead of nothing when the quoted message has no text
+- `h` from input zone now goes back to chat list (vim "left"), instead of stopping at messages
+
+### Changed
+
+- Per-pane `allow-passthrough` now uses `all` instead of `on` so DCS sequences also work in invisible/zoomed panes (popups still don't work — they aren't panes — see CHANGELOG note below)
+
+### Notes
+
+- tmux popups (`display-popup`) cannot render Kitty graphics protocol regardless of `allow-passthrough` value, because popups are not panes in tmux's data model and have no pane id to attach passthrough to. Use `switch-client` to a real session for image rendering instead.
+
 ## [0.4.3] - 2026-04-07
 
 ### Added
@@ -185,6 +201,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.4.4]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.4
 [0.4.3]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.3
 [0.4.2]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.2
 [0.4.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.0

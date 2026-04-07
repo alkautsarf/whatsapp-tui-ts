@@ -212,12 +212,10 @@ export function useAppKeyboard(actions: {
       return;
     }
 
-    // Back to chat list
+    // Back to chat list (vim-style "left")
     if (evt.name === "h") {
-      if (store.focusZone === "messages") {
+      if (store.focusZone === "messages" || store.focusZone === "input") {
         helpers.setFocusZone("chat-list");
-      } else if (store.focusZone === "input") {
-        helpers.setFocusZone("messages");
       }
       return;
     }
