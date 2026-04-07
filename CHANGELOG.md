@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.13] - 2026-04-07
+
+### Fixed
+
+- **Notifications no longer silently suppressed for backgrounded wa-tui sessions.** Reported by elpabl0: he had wa-tui running in a detached tmux session with chris 2's chat selected as the active chat, was working in another tmux session entirely, and never received any notifications for incoming messages from chris 2. Root cause: `src/utils/terminal-focus.ts` defaulted `focused` to `true`, expecting the first `FOCUS_IN`/`FOCUS_OUT` event to correct it. But for a detached tmux session, tmux never fires focus events to a pane that isn't in an attached session — so focus stayed `true` forever and the notification gate's `userActivelyViewing` check (`viewingJid === chatJid && isTerminalFocused()`) always evaluated true, suppressing every notification for the selected chat. Fix: default `focused` to `false`. When the user attaches to the wa-tui session (or if wa-tui starts in a foreground terminal), tmux/the terminal fires `FOCUS_IN` immediately and flips to true within milliseconds. The only edge case is one spurious notification at startup if a message arrives before the first `FOCUS_IN` — acceptable trade-off vs missing every notification for backgrounded sessions.
+
 ## [0.4.12] - 2026-04-07
 
 ### Added

@@ -22,9 +22,21 @@ const DISABLE_FOCUS_REPORTING = "\x1b[?1004l";
 const FOCUS_IN = Buffer.from([0x1b, 0x5b, 0x49]);  // ESC [ I
 const FOCUS_OUT = Buffer.from([0x1b, 0x5b, 0x4f]); // ESC [ O
 
-// Optimistic default: assume we're focused at startup. The first FOCUS_IN
-// or FOCUS_OUT will correct it within milliseconds.
-let focused = true;
+// Pessimistic default: assume NOT focused at startup. This is the correct
+// state for wa-tui running in a detached tmux session — tmux won't fire any
+// focus events to a pane that isn't in an attached session, so without this
+// the focus state would be stuck at "true" forever and notifications would
+// be suppressed for the chat the user happens to have selected, even though
+// they aren't actually looking at wa-tui.
+//
+// When the user attaches to the wa-tui session (or if wa-tui starts in a
+// foreground terminal), tmux/the terminal fires FOCUS_IN immediately and
+// flips this to true within milliseconds — so the only edge case is "user
+// runs wa-tui in foreground, immediately receives a message in a selected
+// chat before the first FOCUS_IN arrives", which produces one spurious
+// notification at most. Acceptable trade-off vs the original bug of missing
+// every notification for a backgrounded session.
+let focused = false;
 let installed = false;
 
 export function isTerminalFocused(): boolean {
