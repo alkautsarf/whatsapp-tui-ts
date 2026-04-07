@@ -42,6 +42,7 @@ export interface AppStoreHelpers {
   clearEncodedImages(): void;
   showToast(message: string, level?: "error" | "info", durationMs?: number): void;
   clearToast(): void;
+  setHelpScrollOffset(offset: number): void;
   createBridge(): ReactiveBridge;
 }
 
@@ -62,6 +63,7 @@ const INITIAL_STORE: AppStore = {
   presenceMap: {},
   encodedImages: {},
   toast: null,
+  helpScrollOffset: 0,
 };
 
 export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFunction<AppStore>, AppStoreHelpers] {
@@ -144,6 +146,8 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
     },
 
     clearToast() { setStore("toast", null); },
+
+    setHelpScrollOffset(offset) { setStore("helpScrollOffset", Math.max(0, offset)); },
 
     createBridge(): ReactiveBridge {
       return {

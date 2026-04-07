@@ -75,8 +75,27 @@ export function MessageBubble(props: BubbleProps) {
   };
 
   const msgContent = () => {
-    if (props.message.text) return props.message.text;
-    if (props.message.media_type) return mediaLabel(props.message.media_type);
+    const text = props.message.text;
+    const mediaType = props.message.media_type;
+
+    // For images and stickers, the inline image renders separately (via the
+    // imageData() path below) and any caption text gets its own row beneath
+    // the image. Don't repeat the [Image] label here.
+    if (mediaType === "imageMessage" || mediaType === "stickerMessage") {
+      return text ?? "";
+    }
+
+    // For other media types (document, video, audio): show the bracketed
+    // label + the caption on separate lines, so the user can see BOTH that
+    // there's an attachment AND the text. Without this, a document with
+    // caption rendered as text-only and looked like the document hadn't sent.
+    if (mediaType) {
+      const label = mediaLabel(mediaType);
+      return text ? `${label}\n${text}` : label;
+    }
+
+    // No media at all — text-only message or one of the type-derived labels.
+    if (text) return text;
     if (props.message.type !== "conversation" && props.message.type !== "unknown") {
       return mediaLabel(props.message.type);
     }

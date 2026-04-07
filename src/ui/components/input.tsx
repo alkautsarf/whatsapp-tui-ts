@@ -5,8 +5,18 @@ import { usePaste } from "@opentui/solid";
 import { useAppStore } from "../state.tsx";
 import { useTheme } from "../theme.tsx";
 import { tryExtractClipboardImageSync } from "../../utils/clipboard-image.ts";
+import { addAttachment, type AttachmentKind } from "../../utils/attachment-registry.ts";
 import type { StoreQueries } from "../../store/queries.ts";
 import type { InputMethods } from "../types.ts";
+
+function kindFromExt(ext: string): AttachmentKind {
+  const e = ext.toLowerCase();
+  if (["jpg", "jpeg", "png", "gif", "bmp", "heic", "heif"].includes(e)) return "image";
+  if (["webp"].includes(e)) return "sticker";
+  if (["mp4", "mov", "avi", "mkv", "webm", "3gp"].includes(e)) return "video";
+  if (["mp3", "ogg", "wav", "opus", "m4a", "aac", "flac"].includes(e)) return "audio";
+  return "document";
+}
 
 const PASTE_THRESHOLD = 500;
 const MAX_SUGGESTIONS = 20;
@@ -165,7 +175,7 @@ export function InputArea(props: {
     }
   });
 
-  // Expose getText/setText for editor mode
+  // Expose getText/setText/insertAtCursor for editor mode + emoji picker
   onMount(() => {
     props.inputMethodsRef?.({
       getText: () => longPasteText() ?? textareaRef?.plainText ?? "",
@@ -173,6 +183,9 @@ export function InputArea(props: {
         setLongPasteText(null);
         try { textareaRef?.replaceText?.(text); } catch {}
         try { textareaRef?.setText?.(text); } catch {}
+      },
+      insertAtCursor: (text: string) => {
+        insertAtCursor(text);
       },
     });
   });
@@ -229,6 +242,29 @@ export function InputArea(props: {
     }
   }
 
+  /**
+   * Insert text at the current cursor position. Used by Ctrl+V image paste,
+   * drag-drop file detection, and the emoji picker to inject content inline,
+   * preserving any text the user has already typed before/after the cursor.
+   *
+   * Also explicitly re-focuses the textarea — this matters for the emoji
+   * picker case, where the picker's own input stole terminal focus while it
+   * was open. After picking, the store still thinks the input is focused,
+   * so the focus createEffect doesn't re-fire — we have to manually restore.
+   */
+  function insertAtCursor(insert: string) {
+    if (!textareaRef) return;
+    const text: string = textareaRef.plainText ?? "";
+    const cursor: number = textareaRef.cursorOffset ?? text.length;
+    const newText = text.slice(0, cursor) + insert + text.slice(cursor);
+    const newCursorPos = cursor + insert.length;
+    try { textareaRef.replaceText(newText); } catch {
+      try { textareaRef.setText(newText); } catch {}
+    }
+    try { textareaRef.cursorOffset = newCursorPos; } catch {}
+    try { textareaRef.focus(); } catch {}
+  }
+
   function acceptCompletion(entry?: FileEntry) {
     const item = entry ?? completionItems()[completionIdx()];
     if (!item || !textareaRef) return;
@@ -265,26 +301,22 @@ export function InputArea(props: {
   // --- Key handling ---
 
   function handleKeyDown(evt: any) {
-    // Ctrl+V → check clipboard for image. If found, fill the input with the
-    // @'<path>' form so the user sees what's about to be sent and can add a
-    // caption before hitting Enter. Matches drag-drop behavior — both routes
-    // populate the input, neither auto-sends.
+    // Ctrl+V → check clipboard for image. If found, register the path in the
+    // attachment registry and insert a `[Image N] ` placeholder at the cursor
+    // (Claude Code style — clean visual, supports inline paste mid-message,
+    // supports multiple images per message). The real path is hidden in the
+    // registry; on send, layout.tsx parses placeholders and dispatches each
+    // attachment plus optional text caption.
     //
-    // If clipboard has no image, fall through to whatever the textarea does
-    // with Ctrl+V by default (usually nothing on macOS — it's the X11 paste
-    // shortcut which terminals on macOS don't intercept the way they do Cmd+V).
+    // If clipboard has no image, fall through to default Ctrl+V behavior
+    // (typically a no-op on macOS — Cmd+V is the standard paste shortcut).
     if (evt.ctrl && (evt.name === "v" || evt.name === "V")) {
       const imagePath = tryExtractClipboardImageSync();
       if (imagePath) {
         evt.preventDefault?.();
         evt.stopPropagation?.();
-        // Single-quote the path so the existing @path parser at layout.tsx
-        // handles it via the sglQuoteMatch branch (handles spaces correctly).
-        const newText = `@'${imagePath}' `;
-        try { textareaRef?.replaceText?.(newText); } catch {
-          try { textareaRef?.setText?.(newText); } catch {}
-        }
-        try { textareaRef.cursorOffset = newText.length; } catch {}
+        const label = addAttachment(imagePath, "image");
+        insertAtCursor(`${label} `);
         return;
       }
       // No image in clipboard — let the event fall through.
@@ -348,17 +380,19 @@ export function InputArea(props: {
     // Drag-drop file detection. When the user drops a file from Finder onto
     // the Ghostty window, the terminal "types" the path into the active
     // textarea — usually with backslash-escaped spaces. If the entire input
-    // is just a valid file path that exists, replace it with the @'<path>'
-    // syntax so the existing send flow handles it as media. Single-quote the
-    // path so the parser handles spaces correctly (the unquoted form uses
-    // \S+ which stops at the first space). The user can add a caption and
-    // hit Enter (or just hit Enter to send without caption).
+    // is just a valid file path that exists, register it in the attachment
+    // registry and replace the input with a `[Image N]` / `[File N]` etc.
+    // placeholder, matching the Ctrl+V paste flow. User can keep typing
+    // before/after the placeholder to add a caption.
     const text = textareaRef?.plainText ?? "";
     const droppedPath = detectDroppedFilePath(text);
     if (droppedPath) {
-      const newText = `@'${droppedPath}' `;
+      const ext = droppedPath.split(".").pop() ?? "";
+      const kind = kindFromExt(ext);
+      const label = addAttachment(droppedPath, kind);
+      const newText = `${label} `;
       // Avoid infinite loop: only replace if the current text isn't already
-      // the @'path' form (which would re-trigger this on the next change event).
+      // the placeholder form.
       if (text.trim() !== newText.trim()) {
         try { textareaRef?.replaceText?.(newText); } catch {
           try { textareaRef?.setText?.(newText); } catch {}

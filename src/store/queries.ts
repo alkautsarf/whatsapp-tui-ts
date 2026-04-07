@@ -74,6 +74,7 @@ export interface StoreQueries {
   listChats(limit?: number): ChatRow[];
   getChat(jid: string): ChatRow | null;
   getMessages(chatJid: string, limit?: number, beforeTs?: number): MessageRow[];
+  searchMessages(chatJid: string, query: string, limit?: number): MessageRow[];
   getMessage(id: string): MessageRow | null;
   getMessageContent(id: string): { text: string | null; type: string } | null;
   getContact(jid: string): ContactRow | null;
@@ -215,6 +216,22 @@ export function initQueries(db: DbInstances): StoreQueries {
     FROM messages
     WHERE (chat_jid = ?1 OR chat_jid = ?2)
       AND (?3 = 0 OR timestamp < ?3)
+    ORDER BY timestamp DESC
+    LIMIT ?4
+  `);
+
+  // Within-chat full-text search. Case-insensitive substring on text only
+  // (media-only messages don't appear in results — there's no body to match).
+  const searchMessagesStmt = reader.prepare<MessageRow, [string, string, string, number]>(`
+    SELECT id, chat_jid, sender_jid, from_me, timestamp, type, text,
+           media_type, media_path, media_key, direct_path, media_url,
+           mimetype, file_name, file_size, width, height, thumbnail,
+           quoted_id, status, push_name
+    FROM messages
+    WHERE (chat_jid = ?1 OR chat_jid = ?2)
+      AND text IS NOT NULL
+      AND text != ''
+      AND text LIKE ?3
     ORDER BY timestamp DESC
     LIMIT ?4
   `);
@@ -415,6 +432,15 @@ export function initQueries(db: DbInstances): StoreQueries {
     getMessages(chatJid, limit = 30, beforeTs) {
       const lidJid = getLidJid(chatJid);
       return getMessagesStmt.all(chatJid, lidJid, beforeTs ?? 0, limit);
+    },
+
+    searchMessages(chatJid, query, limit = 50) {
+      const lidJid = getLidJid(chatJid);
+      // SQL LIKE pattern: case-insensitive matches via SQLite's default
+      // LIKE behavior (case-insensitive for ASCII). For non-ASCII (emoji,
+      // accented chars), case-sensitivity isn't a concern in practice.
+      const pattern = `%${query.replace(/[%_]/g, "\\$&")}%`;
+      return searchMessagesStmt.all(chatJid, lidJid, pattern, limit);
     },
 
     getMessage(id) {

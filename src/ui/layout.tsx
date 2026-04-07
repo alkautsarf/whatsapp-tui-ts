@@ -11,8 +11,12 @@ import { InputArea } from "./components/input.tsx";
 import { StatusBar } from "./components/status-bar.tsx";
 import { SearchOverlay } from "./overlays/search.tsx";
 import { CommandPalette } from "./overlays/command-palette.tsx";
+import { HelpOverlay } from "./overlays/help.tsx";
+import { EmojiPicker } from "./overlays/emoji-picker.tsx";
+import { MessageSearchOverlay } from "./overlays/message-search.tsx";
 import { log } from "../utils/log.ts";
 import { getRawMessage } from "../wa/media.ts";
+import { parsePlaceholders, clearPending, type PendingAttachment } from "../utils/attachment-registry.ts";
 import type { StoreQueries } from "../store/queries.ts";
 import type { WASocket } from "@whiskeysockets/baileys";
 import type { InputMethods } from "./types.ts";
@@ -63,12 +67,36 @@ export function Layout(props: {
   const { store, helpers } = useAppStore();
   const theme = useTheme();
 
+  // Capture inputMethods locally so the emoji picker (rendered as an
+  // overlay below) can insert at the cursor position via this layout
+  // without needing to plumb the input ref through every overlay's props.
+  let localInputMethods: InputMethods | null = null;
+  // Same trick for the messages scrollbox ref so the message-search
+  // overlay can scrollChildIntoView() when the user picks a result.
+  let localMessagesScrollRef: any = null;
+
   function handleSend(text: string) {
     const jid = store.selectedChatJid;
     const sock = props.getSock();
     if (!jid || !sock) return;
 
-    // Check for @"quoted path", @'quoted path', or @path in the text — send as media
+    // Path 1: parse [Image N] / [Video N] / [File N] placeholders from the
+    // attachment registry. This is the primary path for Ctrl+V image paste
+    // and drag-drop, both of which insert placeholder labels at the cursor.
+    // The registry maps each label to its real file path so we can send the
+    // actual files without exposing temp paths in the input box.
+    const { attachments, textWithoutPlaceholders } = parsePlaceholders(text);
+    if (attachments.length > 0) {
+      sendAttachmentsWithCaption(sock, jid, attachments, textWithoutPlaceholders);
+      clearPending();
+      helpers.setReplyTo(null);
+      props.onScrollToBottom?.();
+      return;
+    }
+
+    // Path 2: legacy @path manual entry (still supported for power users
+    // who type paths directly with the @ syntax). Falls through to text
+    // send if no @ pattern matches a real file.
     const dblQuoteMatch = text.match(/@"([^"]+)"/);
     const sglQuoteMatch = text.match(/@'([^']+)'/);
     const plainMatch = text.match(/@(\S+)/);
@@ -117,6 +145,43 @@ export function Layout(props: {
     sock.sendMessage(jid, content, msgOpts).catch(() => {});
     helpers.setReplyTo(null);
     props.onScrollToBottom?.();
+  }
+
+  /**
+   * Send a series of pending attachments plus an optional caption.
+   *   - Single attachment + text → send the attachment with text as caption
+   *     (matches the existing one-image-with-caption behavior).
+   *   - Multiple attachments → send each in order WITHOUT caption, then send
+   *     the caption text as a final standalone text message (if any).
+   *
+   * Each attachment goes through `sendMedia` which handles size validation,
+   * try/catch error handling, and the toast on failure.
+   */
+  async function sendAttachmentsWithCaption(
+    sock: WASocket,
+    jid: string,
+    attachments: PendingAttachment[],
+    text: string,
+  ) {
+    if (attachments.length === 1) {
+      const att = attachments[0]!;
+      sendMedia(sock, jid, att.path, text || undefined);
+      return;
+    }
+
+    // Multi-attachment: send each as a standalone media message in order,
+    // then send any remaining caption text as a final text-only message.
+    for (const att of attachments) {
+      sendMedia(sock, jid, att.path);
+    }
+    if (text) {
+      try {
+        await sock.sendMessage(jid, { text });
+      } catch (e) {
+        log("media", `Trailing text send failed: ${(e as Error)?.message}`);
+        helpers.showToast(`Trailing text failed: ${(e as Error)?.message ?? "unknown"}`, "error");
+      }
+    }
   }
 
   async function sendMedia(sock: WASocket, jid: string, filePath: string, caption?: string) {
@@ -188,23 +253,82 @@ export function Layout(props: {
         {/* Main area — 70% */}
         <box flexGrow={1} flexDirection="column">
           <ChatHeader queries={props.queries} />
-          <Messages queries={props.queries} scrollRef={props.scrollRef} />
+          <Messages
+            queries={props.queries}
+            scrollRef={(el: any) => {
+              localMessagesScrollRef = el;
+              props.scrollRef?.(el);
+            }}
+          />
           <InputArea
             queries={props.queries}
             onSend={handleSend}
-            inputMethodsRef={props.inputMethodsRef}
+            inputMethodsRef={(methods) => {
+              localInputMethods = methods;
+              props.inputMethodsRef?.(methods);
+            }}
           />
         </box>
       </box>
 
       <StatusBar />
 
-      {/* Overlays */}
+      {/* Overlays. Note: HelpOverlay strips emojis from underlying chat list
+          while it's open due to an OpenTUI compositor quirk with wide chars
+          under absolute-positioned layers. Acknowledged trade-off — the help
+          modal is brief enough to look at and dismiss, emojis come back on
+          close. Tried inline replacement to avoid the strip, elpabl0
+          preferred the floating overlay style. */}
       <Show when={store.overlay?.type === "search"}>
         <SearchOverlay queries={props.queries} />
       </Show>
       <Show when={store.overlay?.type === "command-palette"}>
         <CommandPalette onQuit={props.onQuit} />
+      </Show>
+      <Show when={store.overlay?.type === "help"}>
+        <HelpOverlay />
+      </Show>
+      <Show when={store.overlay?.type === "emoji-picker"}>
+        <EmojiPicker
+          onPick={(char) => {
+            // Make sure we're back in INSERT mode + input focus so the
+            // emoji actually appears in the textarea.
+            helpers.setMode("insert");
+            helpers.setFocusZone("input");
+            localInputMethods?.insertAtCursor(char);
+          }}
+        />
+      </Show>
+      <Show when={store.overlay?.type === "message-search"}>
+        <MessageSearchOverlay
+          queries={props.queries}
+          onJump={(msg) => {
+            const jid = store.selectedChatJid;
+            if (!jid) return;
+            const msgs = store.messages[jid] ?? [];
+            const idx = msgs.findIndex((m) => m.id === msg.id);
+            if (idx >= 0) {
+              // Found in the loaded slice — set selected index, focus the
+              // messages zone, and scroll the message into view via the
+              // captured scrollbox ref. Same scroll mechanism as the j/k
+              // navigation in app.tsx.
+              helpers.setSelectedMessageIndex(idx);
+              helpers.setFocusZone("messages");
+              try {
+                localMessagesScrollRef?.scrollChildIntoView?.(`msg-${msg.id}`);
+              } catch {}
+            } else {
+              // Message exists in the DB but not in the currently-loaded
+              // slice — it's older than what's been hydrated. v1 limitation:
+              // tell the user instead of silently failing.
+              helpers.showToast(
+                "Message found in history but not loaded yet — scroll up first",
+                "info",
+                6000,
+              );
+            }
+          }}
+        />
       </Show>
     </box>
   );

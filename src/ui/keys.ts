@@ -81,7 +81,7 @@ export function useAppKeyboard(actions: {
       return;
     }
 
-    // Insert mode: pass through to textarea except Esc and Ctrl+G
+    // Insert mode: pass through to textarea except Esc, Ctrl+G, Ctrl+E
     if (store.mode === "insert") {
       if (evt.name === "escape") {
         drillBack();
@@ -90,6 +90,15 @@ export function useAppKeyboard(actions: {
       if (evt.ctrl && evt.name === "g") {
         evt.preventDefault();
         actions.onOpenEditor?.();
+      }
+      // Ctrl+E from inside the textarea opens the emoji picker. We switch
+      // to "search" mode so the global key handler passes keystrokes through
+      // to the picker's own input element instead of the textarea below it.
+      // The picker's onPick callback restores insert mode + input focus.
+      if (evt.ctrl && evt.name === "e") {
+        evt.preventDefault();
+        helpers.setMode("search");
+        helpers.setOverlay({ type: "emoji-picker" });
       }
       return;
     }
@@ -103,10 +112,60 @@ export function useAppKeyboard(actions: {
       return;
     }
 
-    // Search
+    // Help overlay — `?` key toggles a full keyboard shortcut reference.
+    // Esc / second `?` press closes it via the existing drillBack path.
+    if (evt.name === "?" || (evt.shift && evt.name === "/")) {
+      if (store.overlay?.type === "help") {
+        helpers.setOverlay(null);
+      } else {
+        // Open at the top — reset scroll offset.
+        helpers.setHelpScrollOffset?.(0);
+        helpers.setOverlay({ type: "help" });
+      }
+      return;
+    }
+
+    // While the help overlay is open, intercept j/k/up/down to scroll its
+    // content instead of the message list. Without this, scrolling in the
+    // overlay would silently scroll the underlying messages view.
+    if (store.overlay?.type === "help") {
+      if (evt.name === "j" || evt.name === "down") {
+        helpers.setHelpScrollOffset?.(store.helpScrollOffset + 1);
+        return;
+      }
+      if (evt.name === "k" || evt.name === "up") {
+        helpers.setHelpScrollOffset?.(Math.max(0, store.helpScrollOffset - 1));
+        return;
+      }
+      if (evt.ctrl && evt.name === "d") {
+        helpers.setHelpScrollOffset?.(store.helpScrollOffset + 5);
+        return;
+      }
+      if (evt.ctrl && evt.name === "u") {
+        helpers.setHelpScrollOffset?.(Math.max(0, store.helpScrollOffset - 5));
+        return;
+      }
+      // Let Esc / ? fall through to their handlers above; swallow everything
+      // else so the help overlay isn't dismissed by random keystrokes (and
+      // q doesn't quit the app while reading the help — needs explicit Esc).
+      if (evt.name !== "escape" && evt.name !== "?") {
+        return;
+      }
+    }
+
+    // Search — context-aware. When focus is on messages, search within the
+    // current chat's messages. Otherwise open the chat-list search overlay.
+    // Both branches set mode to "search" so the global handler passes
+    // keystrokes through to the overlay's input element instead of
+    // intercepting them as normal-mode commands.
     if (evt.name === "/" && !evt.ctrl && !evt.meta) {
-      helpers.setMode("search");
-      helpers.setOverlay({ type: "search" });
+      if (store.focusZone === "messages" && store.selectedChatJid) {
+        helpers.setMode("search");
+        helpers.setOverlay({ type: "message-search" });
+      } else {
+        helpers.setMode("search");
+        helpers.setOverlay({ type: "search" });
+      }
       return;
     }
 

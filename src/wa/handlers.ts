@@ -311,15 +311,21 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
     }
   });
 
-  // Presence (typing + online status)
+  // Presence (typing + online status). After v0.4.10's LID dedup, all chats
+  // are stored under canonical phone JIDs. Baileys may deliver presence
+  // updates keyed by LID for contacts WhatsApp has rolled into the privacy
+  // system — without resolveJid() the presence lands under the LID key but
+  // the UI looks up by phone jid, so the typing/online indicator never
+  // shows. Mirror what messages.upsert and chats.upsert/update already do.
   sock.ev.on("presence.update", (json) => {
     const { id, presences } = json;
     if (!id || !presences || !bridge) return;
+    const canonicalJid = resolveJid(id, store);
     const entries = Object.values(presences) as any[];
     const isTyping = entries.some((p) => p.lastKnownPresence === "composing");
     // For DMs, use the single participant's presence; for groups, prefer "composing" > "available"
     const presence = entries[0]?.lastKnownPresence as string | undefined;
-    bridge.onPresenceUpdate(id, isTyping, presence);
+    bridge.onPresenceUpdate(canonicalJid, isTyping, presence);
   });
 
   // Groups

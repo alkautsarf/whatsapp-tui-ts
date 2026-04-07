@@ -15,7 +15,7 @@ export interface ConnectionState {
   reconnectAttempt?: number;
 }
 
-export type OverlayType = "search" | "command-palette";
+export type OverlayType = "search" | "command-palette" | "help" | "emoji-picker" | "message-search";
 
 export interface OverlayState {
   type: OverlayType;
@@ -24,6 +24,7 @@ export interface OverlayState {
 export interface InputMethods {
   getText: () => string;
   setText: (text: string) => void;
+  insertAtCursor: (text: string) => void;
 }
 
 export interface EncodedImageData {
@@ -58,4 +59,6 @@ export interface AppStore {
   presenceMap: Record<string, string>;
   encodedImages: Record<string, EncodedImageData>;
   toast: ToastState | null;
+  /** Scroll offset (in lines) for the help overlay. Reset to 0 on open. */
+  helpScrollOffset: number;
 }

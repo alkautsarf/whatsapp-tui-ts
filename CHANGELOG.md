@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.12] - 2026-04-07
+
+### Added
+
+- **PDF rendering via phosphor in full-view mode.** Hitting Enter on a PDF document message in NORMAL mode now suspends the OpenTUI renderer and runs `phosphor <path>` inline (interactive page navigation built in — j/k/space). Same suspend/resume pattern as the editor mode. Other media types (video/audio/non-PDF documents) still open in the system viewer (QuickTime, Preview, etc.) via background `open` / `xdg-open`.
+- **Help overlay (`?`) showing all keybindings** grouped by mode/zone (Global, Chat List, Messages, Input, @ Completion, Search). Scrollable with j/k or Ctrl+D/U. Distinct from `Ctrl+P` command palette: `?` is the read-only reference, `Ctrl+P` is the executable fuzzy palette. The user explicitly chose to keep both.
+- **`[Image N]` placeholder UX for inline media attachments**, matching Claude Code's clipboard-image flow. Ctrl+V image paste and Finder drag-drop now insert a `[Image N]` / `[File N]` placeholder at the cursor position (not at the start of the input) and stash the real path in an attachment registry. Multiple attachments per message supported. Single attachment + text → sends as captioned media. Multiple attachments + text → sends each attachment in order, then a final text message with the joined caption.
+- **Inline paste mid-message.** The placeholder gets inserted at the current cursor position so you can paste an image into the middle of a typed message: "look at this `[Image 1]` cool right?" — replaces the previous "@'<path>'-replaces-whole-input" behavior.
+- **Emoji picker overlay (`Ctrl+E` from INSERT mode).** Curated 318-emoji catalog with fuzzy keyword search. Arrow keys navigate the grid, Enter inserts at cursor, Esc cancels. Picker switches to "search" mode while open so the global handler passes keys through to the picker's input. After pick, restores INSERT mode + input focus + textarea cursor focus so the user can keep typing immediately. Note: Ctrl+H/J/K/L navigation removed because terminals intercept Ctrl+H as backspace and Ctrl+J as newline before the keys reach the application.
+- **Within-chat message search overlay (`/` when focus is on the messages zone).** Now context-aware: `/` from chat list focus opens the chat-list search (existing behavior), `/` from messages focus opens the new in-chat message search. Type to filter, Enter to jump to the matched message via `scrollChildIntoView`. If the matched message is older than the loaded slice, shows a toast pointing the user to scroll up first.
+- **Single-instance lock at startup** via PID file at `~/.local/share/whatsapp-tui/wa.pid`. Detects existing wa-tui processes via `process.kill(pid, 0)` + `ps -p <pid> -o command=` cross-check (catches stale PID files). Refuses to start with a clear error if another instance is alive. Reported by elpabl0 after he hit a green/yellow connection-flicker from two instances fighting.
+- **`searchMessages(chatJid, query, limit)`** prepared statement in `src/store/queries.ts` for the new in-chat search overlay. Case-insensitive substring on `text`, ordered by timestamp DESC, limited to 50 results.
+- **`InputMethods.insertAtCursor(text)`** exposed for the emoji picker and other consumers that need to inject content at the cursor position without replacing the whole input.
+- **`AppStore.helpScrollOffset`** + `setHelpScrollOffset` helper for the help overlay's manual scroll handling (j/k routed from `keys.ts` instead of using a `<scrollbox>`).
+- **`detectDroppedFilePath()` helper** in `input.tsx` that recognizes terminal-typed file paths (backslash-escaped, single-quoted, double-quoted, plain absolute, tilde-expanded) and routes them through the new attachment registry.
+- **`utils/clipboard-image.ts`** with synchronous osascript-based clipboard image extraction (`the clipboard as «class PNGf»`), saves to `/tmp/wa-tui-clipboard/`.
+- **`utils/attachment-registry.ts`** as the source of truth mapping `[Image N]` / `[File N]` placeholder labels to real file paths + media kinds. Counters reset on send.
+- **`utils/emoji-data.ts`** with the curated 318-entry emoji catalog and `filterEmojis()`.
+- **`utils/instance-lock.ts`** with `acquireLock()` / `releaseLock()` / `InstanceLockError`.
+
+### Fixed
+
+- **Document messages with caption no longer render as text-only locally.** `msgContent` in `message-bubble.tsx` was returning the caption text alone if both text and media were present, hiding the document attachment indicator. The fix renders `[Document]\n<caption>` for documents/videos/audio with captions, keeping images on their existing inline-image-with-separate-caption-row path.
+- **`presence.update` events keyed by LID now resolve to the canonical phone JID** before reaching the bridge. After v0.4.10's LID dedup work, all chats are stored under phone JIDs but baileys was still delivering presence events keyed by LID for some contacts. Without resolution, the typing/online indicator never appeared because the UI looks up presence by phone jid but the data was stored under the LID key. Same `resolveJid()` fix applied to `messages.upsert`, `chats.upsert`, and `chats.update`.
+- **Help overlay scroll indicator no longer overlaps content.** The `visibleLines` math undercounted the modal chrome (border + padding + title + footer) by ~2 lines, causing the last visible binding row to render on top of the "↓ more below" indicator. Adjusted to `overlayHeight - 8` for safety.
+- **Emoji picker scroll content no longer overlaps the footer row.** Same chrome-undercount bug as the help overlay. Modal height now uses `VISIBLE_ROWS + 8` so 6 emoji rows fit cleanly with a 1-row safety buffer above the footer.
+- **Ctrl+V image paste no longer auto-sends without preview.** Now matches drag-drop behavior — both populate the input with `[Image N]` first so the user can verify (and add an optional caption) before hitting Enter. Also fixed the path-quoting issue where the unquoted `@/path` form broke on filenames with spaces.
+
+### Known limitations / accepted trade-offs
+
+- **Emoji picker shows ~10-20 placeholder circles** for emojis whose Unicode codepoints exist but Ghostty's emoji font has no glyph for. The codepoints are valid — they render correctly when sent (the recipient's WhatsApp uses its own font). Local picker just looks blank for those entries. Removable in a follow-up patch by stripping the missing glyphs.
+- **Help overlay strips emojis from the underlying chat list** while open, due to an OpenTUI compositor quirk with wide chars under absolute-positioned overlays. Emojis come back on close. Tried inline replacement to dodge it; elpabl0 preferred the floating overlay style.
+- **Message search jump only works for messages in the loaded slice.** If the matched message is older than the hydrated history, the user gets a toast pointing them to scroll up first to load older messages. Full-history jump would need a larger architectural change.
+
 ## [0.4.11] - 2026-04-07
 
 ### Added

@@ -219,7 +219,11 @@ export function App(props: {
     }
   }
 
-  // Open video/audio/document with system viewer (non-blocking)
+  // Open video/audio/document with the appropriate viewer.
+  // PDFs render inline via phosphor (which supports interactive PDF page nav
+  // — same code path as image rendering). All other media types fall through
+  // to the system viewer (QuickTime for video, etc.) spawned in the background
+  // so the TUI stays active.
   async function openMediaExternal(msg: import("../store/queries.ts").MessageRow) {
     let path = msg.media_path;
     if (!path) {
@@ -230,12 +234,54 @@ export function App(props: {
       log("media", `No path for ${msg.id}`);
       return;
     }
+
+    // Detect PDF by mimetype or extension. mimetype comes from baileys'
+    // documentMessage payload. Extension is a fallback for older messages
+    // that may have null mimetype.
+    const isPdf =
+      msg.mimetype === "application/pdf" ||
+      path.toLowerCase().endsWith(".pdf");
+
+    if (isPdf) {
+      // Render with phosphor — interactive page navigation built in.
+      // Same suspend/resume pattern as openEditor() above.
+      const renderer = props.getRenderer();
+      if (!renderer) return;
+
+      renderer.suspend();
+      process.stdout.write("\x1b[?25h");
+      if (process.stdin.setRawMode) process.stdin.setRawMode(false);
+      process.stdin.resume();
+
+      try {
+        execSync(`phosphor "${path.replace(/"/g, '\\"')}"`, {
+          stdio: "inherit",
+          env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` },
+        });
+      } catch (e) {
+        log("media", `phosphor PDF view failed: ${(e as Error)?.message}`);
+      }
+
+      renderer.resume();
+
+      // Re-transmit inline images after resume (alt screen was cleared by
+      // phosphor's takeover). Same cleanup as openEditor.
+      const jid = store.selectedChatJid;
+      if (jid) {
+        encodingStarted.clear();
+        helpers.clearEncodedImages();
+        clearAllImages();
+        const chatMsgs = store.messages[jid];
+        if (chatMsgs) encodeImagesForChat(chatMsgs);
+      }
+      return;
+    }
+
+    // Non-PDF: spawn system viewer in background
     const isMac = process.platform === "darwin";
     try {
-      // Spawn in background — TUI stays active
       const { spawn } = await import("child_process");
       if (isMac) {
-        // Open with default macOS app (QuickTime for video, Preview for PDF, etc.)
         spawn("open", [path], { detached: true, stdio: "ignore" }).unref();
       } else {
         spawn("xdg-open", [path], { detached: true, stdio: "ignore" }).unref();
