@@ -7,6 +7,7 @@ import { existsSync } from "fs";
 import { log, ok, warn, err } from "./utils/log.ts";
 import { AUTH_DIR, LOG_PATH } from "./utils/paths.ts";
 import { installFocusTracking, uninstallFocusTracking } from "./utils/terminal-focus.ts";
+import { acquireLock, releaseLock, InstanceLockError } from "./utils/instance-lock.ts";
 import type { WASocket } from "@whiskeysockets/baileys";
 
 // ── REPL (Phase 1 — preserved as --repl fallback) ─────────────────
@@ -272,6 +273,18 @@ async function runRepl() {
 // ── TUI Main ────────────────────────────────────────────────────────
 
 async function runTui() {
+  // Acquire single-instance lock BEFORE muting logs so the user actually
+  // sees the "another instance is running" error if it fires.
+  try {
+    acquireLock();
+  } catch (e) {
+    if (e instanceof InstanceLockError) {
+      console.error(e.message);
+      process.exit(1);
+    }
+    throw e;
+  }
+
   const { muteLog, setLogFile } = await import("./utils/log.ts");
   const { render } = await import("@opentui/solid");
   const { createCliRenderer } = await import("@opentui/core");
@@ -327,6 +340,7 @@ async function runTui() {
 
   function quit() {
     uninstallFocusTracking();
+    releaseLock();
     // Destroy renderer first to restore terminal state
     try { renderer.destroy(); } catch {}
     // Restore terminal fully — clear alt screen + any image artifacts

@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.11] - 2026-04-07
+
+### Added
+
+- **Single-instance lock** via PID file at `~/.local/share/whatsapp-tui/wa.pid`. WhatsApp's protocol allows only one active linked-device connection per account, so running two `wa` instances simultaneously causes both to fight (the connection dot flickers between green and yellow). The new lock detects an existing wa-tui process via `process.kill(pid, 0)` + `ps -p <pid> -o command=` cross-check (catches stale PID files where the process died without releasing) and refuses to start with a clear error pointing at the existing PID and suggested resolution. Reported by elpabl0 after he hit the green/yellow flicker from two leftover instances during testing.
+- **Clipboard image paste via Ctrl+V.** Pressing Ctrl+V in the input bar now extracts an image from the macOS clipboard via `osascript` (`the clipboard as «class PNGf»`), saves it to `/tmp/wa-tui-clipboard/`, and fills the input with `@'<path>' ` so the existing send flow handles it. User sees the path before sending, can add a caption, hits Enter to send. If clipboard has no image, Ctrl+V falls through to its default behavior (no-op on macOS, no key conflict).
+- **Drag-and-drop image to send.** When you drag an image file from Finder (or the macOS screenshot popup) onto the Ghostty window with wa-tui in INSERT mode, the path that gets typed into the input is now auto-detected and replaced with `@'<path>' ` for the send flow. Handles backslash-escaped paths (Ghostty's default), single-quoted, double-quoted, and unquoted forms. Tilde-expansion supported. Detection only fires when the entire input is a valid file path that exists, so manual typing of paths in messages isn't accidentally rewritten.
+
+### Notes
+
+- Both Ctrl+V and drag-drop populate the input with `@'<path>' ` rather than auto-sending — the user sees what's about to be sent and can add an optional caption before hitting Enter. Matches the behavior of @path manual entry.
+- Followup for v0.4.12 (already requested by elpabl0 during testing): replace the visible path with a `[Image N]` placeholder for cleaner UX matching Claude Code, support inline paste mid-message (not just at the start), and route PDF full-view through phosphor instead of the system viewer.
+
 ## [0.4.10] - 2026-04-07
 
 ### Fixed

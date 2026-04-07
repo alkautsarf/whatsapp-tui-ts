@@ -4,6 +4,7 @@ import { join, dirname, basename } from "path";
 import { usePaste } from "@opentui/solid";
 import { useAppStore } from "../state.tsx";
 import { useTheme } from "../theme.tsx";
+import { tryExtractClipboardImageSync } from "../../utils/clipboard-image.ts";
 import type { StoreQueries } from "../../store/queries.ts";
 import type { InputMethods } from "../types.ts";
 
@@ -16,6 +17,56 @@ interface FileEntry {
   name: string;
   path: string;
   isDir: boolean;
+}
+
+/**
+ * Detect when the input text is JUST a file path that was likely typed by a
+ * Ghostty/iTerm drag-drop event (not by the user typing manually). Handles:
+ *   - Plain absolute path: /Users/foo/bar.png
+ *   - Tilde-expanded:      ~/Downloads/bar.png
+ *   - Backslash-escaped:   /Users/foo/My\ File.png  ← Ghostty's default for spaces
+ *   - Single-quoted:       '/Users/foo/My File.png'
+ *   - Double-quoted:       "/Users/foo/My File.png"
+ *
+ * Returns the unescaped, expanded absolute path if the input is a file that
+ * exists, or null otherwise. Caller should auto-prefix the result with `@`
+ * so the existing media-send flow handles it.
+ */
+function detectDroppedFilePath(text: string): string | null {
+  let raw = text.trim();
+  if (!raw) return null;
+
+  // Strip surrounding quotes if both ends match
+  if (
+    (raw.startsWith("'") && raw.endsWith("'")) ||
+    (raw.startsWith('"') && raw.endsWith('"'))
+  ) {
+    raw = raw.slice(1, -1);
+  }
+
+  // Unescape backslash sequences (\ + space, \(, etc.)
+  const unescaped = raw.replace(/\\(.)/g, "$1");
+
+  // Must look like an absolute path (or ~)
+  if (!unescaped.startsWith("/") && !unescaped.startsWith("~")) return null;
+
+  // Reject paths containing whitespace that DIDN'T have escapes — those are
+  // probably user prose, not a drop. (Drag-drop on macOS always escapes.)
+  if (raw === unescaped && /\s/.test(unescaped)) return null;
+
+  // Expand ~
+  const expanded = unescaped.startsWith("~")
+    ? (process.env.HOME || "") + unescaped.slice(1)
+    : unescaped;
+
+  try {
+    if (!existsSync(expanded)) return null;
+    if (!statSync(expanded).isFile()) return null;
+  } catch {
+    return null;
+  }
+
+  return expanded;
 }
 
 function listFilesForQuery(query: string): FileEntry[] {
@@ -214,6 +265,31 @@ export function InputArea(props: {
   // --- Key handling ---
 
   function handleKeyDown(evt: any) {
+    // Ctrl+V → check clipboard for image. If found, fill the input with the
+    // @'<path>' form so the user sees what's about to be sent and can add a
+    // caption before hitting Enter. Matches drag-drop behavior — both routes
+    // populate the input, neither auto-sends.
+    //
+    // If clipboard has no image, fall through to whatever the textarea does
+    // with Ctrl+V by default (usually nothing on macOS — it's the X11 paste
+    // shortcut which terminals on macOS don't intercept the way they do Cmd+V).
+    if (evt.ctrl && (evt.name === "v" || evt.name === "V")) {
+      const imagePath = tryExtractClipboardImageSync();
+      if (imagePath) {
+        evt.preventDefault?.();
+        evt.stopPropagation?.();
+        // Single-quote the path so the existing @path parser at layout.tsx
+        // handles it via the sglQuoteMatch branch (handles spaces correctly).
+        const newText = `@'${imagePath}' `;
+        try { textareaRef?.replaceText?.(newText); } catch {
+          try { textareaRef?.setText?.(newText); } catch {}
+        }
+        try { textareaRef.cursorOffset = newText.length; } catch {}
+        return;
+      }
+      // No image in clipboard — let the event fall through.
+    }
+
     // @ completion navigation
     if (completionActive() && completionItems().length > 0) {
       if (evt.name === "tab" || (evt.name === "return" && !evt.meta && !evt.ctrl)) {
@@ -268,6 +344,28 @@ export function InputArea(props: {
 
   function handleContentChange() {
     checkForCompletion();
+
+    // Drag-drop file detection. When the user drops a file from Finder onto
+    // the Ghostty window, the terminal "types" the path into the active
+    // textarea — usually with backslash-escaped spaces. If the entire input
+    // is just a valid file path that exists, replace it with the @'<path>'
+    // syntax so the existing send flow handles it as media. Single-quote the
+    // path so the parser handles spaces correctly (the unquoted form uses
+    // \S+ which stops at the first space). The user can add a caption and
+    // hit Enter (or just hit Enter to send without caption).
+    const text = textareaRef?.plainText ?? "";
+    const droppedPath = detectDroppedFilePath(text);
+    if (droppedPath) {
+      const newText = `@'${droppedPath}' `;
+      // Avoid infinite loop: only replace if the current text isn't already
+      // the @'path' form (which would re-trigger this on the next change event).
+      if (text.trim() !== newText.trim()) {
+        try { textareaRef?.replaceText?.(newText); } catch {
+          try { textareaRef?.setText?.(newText); } catch {}
+        }
+        try { textareaRef.cursorOffset = newText.length; } catch {}
+      }
+    }
   }
 
   // Height: base 3 + 1 for reply + completion rows
