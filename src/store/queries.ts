@@ -72,6 +72,7 @@ export interface StoreQueries {
 
   // Read
   listChats(limit?: number): ChatRow[];
+  getChat(jid: string): ChatRow | null;
   getMessages(chatJid: string, limit?: number, beforeTs?: number): MessageRow[];
   getMessage(id: string): MessageRow | null;
   getMessageContent(id: string): { text: string | null; type: string } | null;
@@ -181,6 +182,11 @@ export function initQueries(db: DbInstances): StoreQueries {
       ))
     ORDER BY c.pinned DESC, last_msg_ts DESC
     LIMIT ?1
+  `);
+
+  const getChatStmt = reader.prepare<ChatRow, [string]>(`
+    SELECT jid, name, last_msg_ts, unread, pinned, archived, muted_until, is_group, lid_jid
+    FROM chats WHERE jid = ?1
   `);
 
   const getMessagesStmt = reader.prepare<MessageRow, [string, string, number, number]>(`
@@ -382,6 +388,10 @@ export function initQueries(db: DbInstances): StoreQueries {
 
     listChats(limit = 50) {
       return listChatsStmt.all(limit);
+    },
+
+    getChat(jid) {
+      return getChatStmt.get(jid) ?? null;
     },
 
     getMessages(chatJid, limit = 30, beforeTs) {

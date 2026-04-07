@@ -5,6 +5,10 @@ node_modules
 out
 dist
 *.tgz
+*.tar.gz
+
+# notifier build artifacts
+notifier/build/
 
 # code coverage
 coverage

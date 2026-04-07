@@ -6,6 +6,7 @@ import { createInterface } from "readline";
 import { existsSync } from "fs";
 import { log, ok, warn, err } from "./utils/log.ts";
 import { AUTH_DIR, LOG_PATH } from "./utils/paths.ts";
+import { installFocusTracking, uninstallFocusTracking } from "./utils/terminal-focus.ts";
 import type { WASocket } from "@whiskeysockets/baileys";
 
 // ── REPL (Phase 1 — preserved as --repl fallback) ─────────────────
@@ -318,7 +319,14 @@ async function runTui() {
     exitOnCtrlC: false,
   });
 
+  // Track terminal focus so notifications can suppress only when wa-tui's
+  // pane is actually visible (not just when a chat happens to be selected
+  // in a background tmux session). Must run AFTER renderer setup so it
+  // doesn't fight stdin raw-mode initialization.
+  installFocusTracking();
+
   function quit() {
+    uninstallFocusTracking();
     // Destroy renderer first to restore terminal state
     try { renderer.destroy(); } catch {}
     // Restore terminal fully — clear alt screen + any image artifacts

@@ -7,8 +7,10 @@ import {
 import type { StoreQueries, ContactRow, ChatRow, MessageRow } from "../store/queries.ts";
 import type { ReactiveBridge } from "../ui/state.tsx";
 import { log, warn } from "../utils/log.ts";
+import { notify } from "../utils/notify.ts";
+import { isTerminalFocused } from "../utils/terminal-focus.ts";
 import { cacheRawMessage } from "./media.ts";
-import { MEDIA_TYPES, SKIP_MESSAGE_TYPES } from "./message-types.ts";
+import { MEDIA_TYPES, SKIP_MESSAGE_TYPES, mediaLabel } from "./message-types.ts";
 
 // ── Converters ──────────────────────────────────────────────────────
 
@@ -197,6 +199,10 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
     // pushing chats.update with unreadCount>0 and the badge ghosts back.
     const readKeys: WAMessageKey[] = [];
     const viewingJid = bridge?.getViewJid?.() ?? null;
+    // Only fire system notifications for "notify" upserts (real new messages
+    // arriving), never for "append" / history sync replays.
+    const allowNotifications = type === "notify";
+    const nowSeconds = Math.floor(Date.now() / 1000);
 
     for (const msg of msgs) {
       if (msg.message && msg.key?.id) cacheRawMessage(msg);
@@ -226,6 +232,46 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
               ? (row.sender_jid ?? undefined)
               : undefined,
           });
+        }
+
+        // System notification gate — fires only when ALL conditions hold:
+        //   1. type === "notify"            (real new message, not history sync)
+        //   2. !from_me                     (not sent by us)
+        //   3. NOT (chat is selected AND wa-tui terminal is focused)
+        //                                   (suppress only when user is actually
+        //                                    looking at the chat — a chat being
+        //                                    selected in a background tmux session
+        //                                    should still notify)
+        //   4. chat is not status@broadcast (status updates are noise)
+        //   5. chat is not muted on WA      (respect user's mute preference)
+        //   6. per-chat rate limit (3s)     (handled inside notify())
+        const userActivelyViewing =
+          viewingJid === chatJid && isTerminalFocused();
+        if (
+          allowNotifications &&
+          row.from_me === 0 &&
+          !userActivelyViewing &&
+          chatJid !== "status@broadcast"
+        ) {
+          const chatRow = store.getChat(chatJid);
+          const muted = chatRow?.muted_until
+            ? chatRow.muted_until === -1 || chatRow.muted_until > nowSeconds
+            : false;
+          if (!muted) {
+            const isGroup = chatJid.endsWith("@g.us");
+            const chatName = chatRow?.name ?? store.resolveContactName(chatJid);
+            const messageText = row.text ?? mediaLabel(row.type) ?? "[message]";
+            const senderName = msg.pushName ?? null;
+            const body = isGroup && senderName
+              ? `${senderName}: ${messageText}`
+              : messageText;
+            notify({
+              title: chatName,
+              body,
+              chatJid,
+              messageId: row.id,
+            });
+          }
         }
       } else {
         store.insertMessage(row);

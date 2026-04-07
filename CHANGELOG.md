@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.7] - 2026-04-07
+
+### Added
+
+- **Native macOS notifications via WhatsAppTuiNotifier daemon** — opt-in Swift app installed via `notifier/install.sh`. Fires native `UNUserNotifications` with the WhatsApp icon, Glass sound, and persistent banner style on every message that passes the notification gate. Decoupled from wa-tui via `/tmp/wa-tui-notif/<ts>-<rand>.json` JSON files watched by FSEvents — bursts don't drop. See `notifier/README.md` and the [native notifications section](README.md#native-notifications-macos-only-optional) of the main README.
+- **Notification gate** with 6 conditions in `messages.upsert`: not from me, message type is "notify" (real new message, not history sync), chat is not currently focused (terminal focus + selected chat both required), chat is not status@broadcast, chat is not muted on WhatsApp, per-chat 3s rate limit.
+- **Terminal focus tracking** via xterm focus reporting (DEC mode 1004) in `src/utils/terminal-focus.ts`. wa-tui asks the terminal to send `ESC [ I` (focus in) and `ESC [ O` (focus out) on stdin. Tracked via a tiny atom and exposed to handlers, so notifications correctly fire when wa-tui has a chat selected but its tmux pane / terminal window is in the background. Verified working on Ghostty + tmux + `focus-events on`.
+- **`getChat(jid)`** prepared statement in `src/store/queries.ts` so the notification trigger can read `muted_until` to respect WhatsApp mute settings.
+- **Self-contained README rewrite** with installation, quick-start nav diagram, native notifications setup, data dir layout, Rust whatsapp-tui collision instructions, project layout, and acknowledgments.
+- **`notifier/README.md`** documenting the daemon: install/uninstall flow, recommended notification settings, JSON payload schema, log paths, and architecture rationale.
+- **`.gitignore`**: `*.tar.gz` and `notifier/build/` so release artifacts and Swift build output stay untracked.
+
+### Notes
+
+- Daemon is opt-in only — `brew install whatsapp-tui` and `npm install -g whatsapp-tui-ts` give you only the main `wa` CLI. Notifications are silent no-ops without the daemon (zero impact on Linux/Windows users or anyone who doesn't want a background daemon).
+- Long-term followup tracked separately: `wa install-notifier` subcommand that wraps `notifier/install.sh` so users don't need to clone the repo.
+
 ## [0.4.6] - 2026-04-07
 
 ### Fixed
