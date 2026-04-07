@@ -93,9 +93,25 @@ export function MessageBubble(props: BubbleProps) {
     return lines.join("\n");
   });
 
+  // Estimate the number of visual lines the rendered text will occupy after
+  // word wrapping in the bubble. The bubble has `maxWidth="65%"` inside the
+  // messages area which is `flexGrow=1` of the parent (chat list takes 30%),
+  // so the bubble's interior text width is approximately:
+  //   termCols * 0.70 (messages area) * 0.65 (bubble maxWidth) - 2 (paddingX)
+  // We use ceil(line.length / wrapCols) per explicit \n-separated line to
+  // count how many visual rows each will wrap to, then sum. This is a
+  // character-count approximation — emoji and CJK take 2 cells each, so
+  // wide-char-heavy messages may slightly under-count. The 4-char safety
+  // margin compensates for that and for word-boundary wrap which can leave
+  // a partial line.
   const contentLineCount = createMemo(() => {
     const t = contentText();
-    return t ? t.split("\n").length : 0;
+    if (!t) return 0;
+    const termCols = process.stdout.columns || 80;
+    const wrapCols = Math.max(20, Math.floor(termCols * 0.70 * 0.65) - 4);
+    return t.split("\n").reduce((sum, line) => {
+      return sum + Math.max(1, Math.ceil(line.length / wrapCols));
+    }, 0);
   });
 
   const nameColor = () => senderColorFromName(props.senderName, theme.senderColors);

@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-tui-ts",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "description": "WhatsApp TUI client with vim keybindings",
   "module": "src/index.tsx",
   "type": "module",

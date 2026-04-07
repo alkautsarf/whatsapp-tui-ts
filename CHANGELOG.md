@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.9] - 2026-04-07
+
+### Fixed
+
+- **Long messages no longer get visually truncated in the chat view.** Reported by chris (relayed via elpabl0): a 119-char message without explicit newlines was clipped at column ~59 ("blom tau nih, kyk nya sih display, klo outcoming message ke" cut off mid-word). Root cause was in `src/ui/components/message-bubble.tsx`: `contentLineCount` only counted explicit `\n` characters via `text.split("\n").length`, so any single-line message that wraps to multiple visual rows still got `height={1}`, clipping everything past the first wrapped line. The fix computes wrapped line count from `process.stdout.columns × 0.70 (messages area) × 0.65 (bubble maxWidth) - 4 (padding)`, with `Math.max(1, Math.ceil(line.length / wrapCols))` per `\n`-separated segment. Verified end-to-end against the actual long message in chris's chat.
+
 ## [0.4.8] - 2026-04-07
 
 ### Fixed
