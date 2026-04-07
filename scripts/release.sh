@@ -1,38 +1,27 @@
 #!/bin/bash
-# Build release tarball for Homebrew
+# Build cross-platform source tarball for Homebrew
+# Single tarball — formula runs `bun install` at install time so the correct
+# per-arch native modules (OpenTUI Zig binaries, etc.) are pulled on each platform.
 # Usage: ./scripts/release.sh
 
 set -euo pipefail
 
 VERSION=$(node -p "require('./package.json').version")
 NAME="whatsapp-tui"
-ARCH=$(uname -m)
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 
-# Normalize arch
-case "$ARCH" in
-  arm64|aarch64) ARCH="arm64" ;;
-  x86_64) ARCH="x64" ;;
-esac
-
-TARBALL="${NAME}-v${VERSION}-${OS}-${ARCH}.tar.gz"
+TARBALL="${NAME}-v${VERSION}-source.tar.gz"
 DIST="dist/${NAME}"
 
 echo "Building ${TARBALL}..."
 
 rm -rf dist
-mkdir -p "${DIST}/bin" "${DIST}/src" "${DIST}/node_modules"
+mkdir -p "${DIST}/bin" "${DIST}/src"
 
-# Copy source + config
+# Copy source + config + lockfile (no node_modules — installed at brew install time)
 cp -r src/ "${DIST}/src/"
-cp package.json tsconfig.json bunfig.toml ws-override.ts README.md "${DIST}/"
+cp package.json bun.lock tsconfig.json bunfig.toml ws-override.ts README.md "${DIST}/"
 
-# Install production deps only
-cd "${DIST}"
-bun install --production --frozen-lockfile 2>/dev/null || bun install --production
-cd -
-
-# Create wrapper script — must cd to SCRIPT_DIR so bun finds tsconfig.json/bunfig.toml
+# Wrapper script — cd to SCRIPT_DIR so bun finds tsconfig.json/bunfig.toml
 cat > "${DIST}/bin/wa" << 'WRAPPER'
 #!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -41,10 +30,8 @@ exec bun run src/index.tsx "$@"
 WRAPPER
 chmod +x "${DIST}/bin/wa"
 
-# Also create watui alias
 ln -sf "wa" "${DIST}/bin/watui"
 
-# Create tarball
 cd dist
 tar -czf "../${TARBALL}" "${NAME}/"
 cd ..

@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.5] - 2026-04-07
+
+### Fixed
+
+- Brew formula now installs cross-platform — was previously macOS-arm64-only and broke on linuxbrew with `formula requires at least a URL`. Reported by christopher via chilldawg.
+
+### Changed
+
+- Release tarball is now source-only (no bundled `node_modules`) — `bun install` runs at brew install time, so the correct per-arch native modules (OpenTUI Zig binaries) are pulled on each platform. Single tarball replaces the old per-arch matrix.
+- `scripts/release.sh` no longer suffixes the tarball with `${OS}-${ARCH}` — it produces `whatsapp-tui-vX.Y.Z-source.tar.gz` only.
+
 ## [0.4.4] - 2026-04-07
 
 ### Fixed
