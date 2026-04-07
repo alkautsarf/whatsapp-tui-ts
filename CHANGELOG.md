@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.6] - 2026-04-07
+
+### Fixed
+
+- Detect and bail cleanly when the data dir contains a database from the original Rust whatsapp-tui project. Both projects default to `~/.local/share/whatsapp-tui/` and the schemas are completely incompatible — christopher (chilldawg's collaborator) hit `SQLiteError: no such column: lid` on first run after `brew install` because his existing data dir was from the Rust version. The TS rewrite now refuses to start with a clear, actionable error message instructing the user to back up the old data and let the TS rewrite create a fresh database. Reported by christopher via chilldawg.
+
+### Notes
+
+- Long-term followup tracked separately: split data dirs so the TS rewrite uses `~/.local/share/whatsapp-tui-ts/` and never collides with the Rust version's path again.
+
 ## [0.4.5] - 2026-04-07
 
 ### Fixed

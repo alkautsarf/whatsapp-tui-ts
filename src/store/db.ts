@@ -69,6 +69,47 @@ CREATE TABLE IF NOT EXISTS group_participants (
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
 `;
 
+/**
+ * Refuse to start if the database wasn't created by whatsapp-tui-ts.
+ *
+ * Both the original Rust `whatsapp-tui` and this TypeScript rewrite default
+ * to `~/.local/share/whatsapp-tui/` as their data dir, so a user who
+ * previously ran the Rust version and then `brew install`s the TS rewrite
+ * will hit this codebase pointed at a DB shaped for a completely different
+ * schema. Trying to migrate cross-codebase is a data-loss risk; the safe
+ * move is to detect the mismatch up-front and tell the user how to fix it.
+ *
+ * Detection: every TS-rewrite contacts table since the very first commit
+ * has had a `lid` column. If `contacts` exists without `lid`, the DB came
+ * from somewhere else (almost certainly the Rust version, which has its
+ * own `push_name`/`profile_pic_url` columns and FTS5/reactions tables).
+ */
+function detectForeignSchema(writer: Database) {
+  const contactsExists = writer
+    .query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='contacts'")
+    .get();
+  if (!contactsExists) return; // Fresh DB — nothing to check.
+
+  const hasLid = writer
+    .query("SELECT 1 FROM pragma_table_info('contacts') WHERE name='lid'")
+    .get();
+  if (hasLid) return; // Our schema — proceed normally.
+
+  throw new Error(`
+This database wasn't created by whatsapp-tui-ts.
+
+It looks like data from the original Rust whatsapp-tui project, which
+uses a different schema. The TypeScript rewrite cannot read it.
+
+To use the TypeScript rewrite, back up the existing data and start fresh:
+
+  mv ~/.local/share/whatsapp-tui ~/.local/share/whatsapp-tui.rust-backup
+  wa
+
+Your old Rust data is preserved in the .rust-backup directory.
+`);
+}
+
 function applySchema(writer: Database) {
   writer.run("BEGIN");
   try {
@@ -124,6 +165,7 @@ export function initDb(dbPath = DB_PATH): DbInstances {
   writer.run("PRAGMA cache_size = -32000");
   writer.run("PRAGMA busy_timeout = 5000");
 
+  detectForeignSchema(writer);
   applySchema(writer);
   migrate(writer);
 
