@@ -2,6 +2,7 @@ import { For, Show } from "solid-js";
 import { useAppStore } from "../state.tsx";
 import { useTheme } from "../theme.tsx";
 import type { StoreQueries } from "../../store/queries.ts";
+import { mediaLabel } from "../../wa/message-types.ts";
 
 function formatTime(ts: number | null | undefined): string {
   if (!ts) return "";
@@ -70,6 +71,8 @@ export function ChatList(props: { queries: StoreQueries; scrollRef?: (el: any) =
               const preview = () => {
                 const text = chat.last_msg_text;
                 if (text) return truncate(text.replace(/\n/g, " "), 30);
+                const label = mediaLabel(chat.last_msg_type);
+                if (label) return label;
                 if (chat.is_group) return "(group)";
                 return "";
               };

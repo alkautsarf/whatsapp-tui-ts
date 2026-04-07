@@ -21,6 +21,11 @@ export interface WaClient {
 
 const FALLBACK_WA_VERSION: [number, number, number] = [2, 3000, 1035194821];
 
+// Force reconnect if the socket is "open" but has received zero frames for this long.
+// WhatsApp sends WS-level pings every ~20s, so 90s of silence means the socket is dead.
+const LIVENESS_TIMEOUT_MS = 90_000;
+const LIVENESS_CHECK_INTERVAL_MS = 30_000;
+
 export interface ClientOptions {
   authDir?: string;
   logLevel?: string;
@@ -87,6 +92,30 @@ function initClientCore(options: ClientOptions): {
         getMessage: options.getMessage ?? (async () => undefined),
       });
 
+      // Zombie-socket defense: after rapid 440/stream-replaced churn, the
+      // socket can stay "open" forever without firing events. Track raw WS
+      // frames (which include WA's ~20s server pings) and force a reconnect
+      // if nothing arrives for LIVENESS_TIMEOUT_MS.
+      let lastEventAt = Date.now();
+      let isOpen = false;
+      const bumpLiveness = () => { lastEventAt = Date.now(); };
+
+      const ws = (sock as any).ws;
+      if (ws?.on) {
+        try { ws.on("message", bumpLiveness); } catch {}
+      }
+
+      const healthCheckInterval = setInterval(() => {
+        if (!isOpen) return;
+        const silentMs = Date.now() - lastEventAt;
+        if (silentMs > LIVENESS_TIMEOUT_MS) {
+          warn("wa", `Socket silent for ${Math.round(silentMs / 1000)}s — forcing reconnect`);
+          clearInterval(healthCheckInterval);
+          isOpen = false;
+          try { sock.end(new Error("liveness timeout")); } catch {}
+        }
+      }, LIVENESS_CHECK_INTERVAL_MS);
+
       sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
@@ -100,6 +129,8 @@ function initClientCore(options: ClientOptions): {
         }
 
         if (connection === "close") {
+          isOpen = false;
+          clearInterval(healthCheckInterval);
           const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
 
           if (statusCode === DisconnectReason.loggedOut) {
@@ -129,6 +160,8 @@ function initClientCore(options: ClientOptions): {
           }
         } else if (connection === "open") {
           reconnectAttempt = 0;
+          isOpen = true;
+          bumpLiveness();
           ok("wa", "Connected to WhatsApp!");
           const me = sock.user;
           if (me) {

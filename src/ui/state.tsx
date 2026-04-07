@@ -20,6 +20,8 @@ export interface ReactiveBridge {
   onContactUpdate(contact: ContactRow): void;
   onStatusUpdate(msgId: string, status: number): void;
   onPresenceUpdate(chatJid: string, isTyping: boolean, presence?: string): void;
+  /** Read by wa/handlers to decide whether to auto-mark incoming messages as read. */
+  getViewJid(): string | null;
 }
 
 // ── Store helpers ───────────────────────────────────────────────────
@@ -85,11 +87,12 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
     setStore("selectedChatJid", jid);
     setStore("selectedMessageIndex", 0);
     setStore("replyToMessageId", null);
-    // Load messages for this chat
     const msgs = queries.getMessages(jid, 100);
     setStore("messages", jid, msgs);
-    // Reset unread in both store AND database (persists across restarts)
-    setStore("chats", (c) => c.jid === jid, "unread", 0);
+    const idx = store.chats.findIndex((c) => c.jid === jid);
+    if (idx >= 0) {
+      setStore("chats", idx, "unread", 0);
+    }
     queries.clearUnread(jid);
   }
 
@@ -134,14 +137,28 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
         onNewMessage(msg, chatJid) {
           log("bridge", `onNewMessage: ${chatJid} | viewing: ${store.selectedChatJid} | text: ${msg.text?.slice(0, 40)}`);
           const viewing = store.selectedChatJid;
-          if (viewing === chatJid) {
+          const isViewingThisChat = viewing === chatJid;
+          if (isViewingThisChat) {
             const msgs = queries.getMessages(viewing, 100);
             setStore("messages", viewing, msgs);
           }
           const chatIdx = store.chats.findIndex(c => c.jid === chatJid);
+          const shouldBumpUnread = !msg.from_me && !isViewingThisChat;
           if (chatIdx >= 0) {
             setStore("chats", chatIdx, "last_msg_ts", msg.timestamp);
-            if (msg.text) setStore("chats", chatIdx, "last_msg_text", msg.text);
+            // Always update both fields so a sticker/media arriving after
+            // a text doesn't leave a stale preview behind.
+            setStore("chats", chatIdx, "last_msg_text", msg.text ?? null);
+            setStore("chats", chatIdx, "last_msg_type", msg.type);
+            if (shouldBumpUnread) {
+              setStore("chats", chatIdx, "unread", (u) => (u ?? 0) + 1);
+              queries.incrementUnread(chatJid);
+            } else if (isViewingThisChat && (store.chats[chatIdx]?.unread ?? 0) > 0) {
+              // Belt-and-suspenders: a stale increment shouldn't survive
+              // while the user is staring at the chat.
+              setStore("chats", chatIdx, "unread", 0);
+              queries.clearUnread(chatJid);
+            }
           }
           // Re-sort only if the updated chat isn't already at the top (after pinned chats)
           const pinnedCount = store.chats.filter(c => (c.pinned ?? 0) > 0).length;
@@ -154,7 +171,13 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
           }
         },
 
-        onChatUpdate() {
+        onChatUpdate(chat) {
+          // WA may push chats.update with unreadCount>0 before the readReceipt
+          // round-trips. Don't let it ghost the badge back into the chat the
+          // user is staring at.
+          if (chat?.jid && chat.jid === store.selectedChatJid) {
+            queries.clearUnread(chat.jid);
+          }
           refreshChats();
         },
 
@@ -184,6 +207,10 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
           if (presence && store.presenceMap[chatJid] !== presence) {
             setStore("presenceMap", chatJid, presence);
           }
+        },
+
+        getViewJid() {
+          return store.selectedChatJid;
         },
       };
     },

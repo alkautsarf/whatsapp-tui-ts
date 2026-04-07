@@ -27,7 +27,7 @@ Run `wa` or `watui` to start. On first run, scan the QR code inside the TUI.
 
 Data stored at `~/.local/share/whatsapp-tui/` (auth, database, media, logs).
 
-## Current Status (v0.4.2)
+## Current Status (v0.4.3)
 
 - Full terminal UI with OpenTUI + SolidJS: split layout, vim keybindings, message bubbles
 - Real-time messaging: send/receive with delivery receipts and read status

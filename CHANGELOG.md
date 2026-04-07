@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.3] - 2026-04-07
+
+### Added
+
+- Socket liveness health check: forces reconnect after 90s of WS-frame silence to recover from zombie sockets caused by stream-replaced churn
+
+### Fixed
+
+- Unread badge never incrementing on incoming messages (only history sync ever set the count) — bridge now bumps store + DB on incoming, skipping own messages and the currently-viewed chat
+- Unread badge ghosting back into the currently-viewed chat after WhatsApp pushes a stale `chats.update` — handlers now batch-call `sock.readMessages` for messages landing in the viewed chat, and the bridge defensively re-clears on view
+- Last-message preview empty when latest message is a sticker/photo/video and stale when media arrives after a text — chat list now falls back to a media label and always overwrites text/type per message
+
+### Changed
+
+- Centralized WhatsApp message-type constants and label helper into `src/wa/message-types.ts` (used by chat list, message bubble, and handlers)
+
 ## [0.4.2] - 2026-04-06
 
 ### Added
@@ -169,6 +185,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.4.3]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.3
 [0.4.2]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.2
 [0.4.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.0
 [0.3.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.3.0

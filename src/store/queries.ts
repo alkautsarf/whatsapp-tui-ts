@@ -22,6 +22,7 @@ export interface ChatRow {
   is_group?: number;
   lid_jid?: string | null;
   last_msg_text?: string | null;
+  last_msg_type?: string | null;
 }
 
 export interface MessageRow {
@@ -61,6 +62,8 @@ export interface StoreQueries {
   insertMessage(m: MessageRow): void;
   updateMessageStatus(id: string, status: number): void;
   updateMediaPath(id: string, path: string): void;
+  clearUnread(jid: string): void;
+  incrementUnread(jid: string): void;
   upsertGroupParticipants(groupJid: string, participants: GroupParticipantRow[]): void;
   removeGroupParticipants(groupJid: string, userJids: string[]): void;
   bulkUpsertContacts(contacts: ContactRow[]): void;
@@ -125,6 +128,10 @@ export function initQueries(db: DbInstances): StoreQueries {
     UPDATE chats SET unread = 0 WHERE jid = ?1
   `);
 
+  const incrementUnreadStmt = writer.prepare(`
+    UPDATE chats SET unread = COALESCE(unread, 0) + 1 WHERE jid = ?1
+  `);
+
   const insertMsgStmt = writer.prepare(`
     INSERT OR REPLACE INTO messages
       (id, chat_jid, sender_jid, from_me, timestamp, type, text,
@@ -162,7 +169,10 @@ export function initQueries(db: DbInstances): StoreQueries {
       c.unread, c.pinned, c.archived, c.muted_until, c.is_group, c.lid_jid,
       (SELECT m.text FROM messages m
        WHERE m.chat_jid = c.jid OR m.chat_jid = c.lid_jid
-       ORDER BY m.timestamp DESC LIMIT 1) as last_msg_text
+       ORDER BY m.timestamp DESC LIMIT 1) as last_msg_text,
+      (SELECT m.type FROM messages m
+       WHERE m.chat_jid = c.jid OR m.chat_jid = c.lid_jid
+       ORDER BY m.timestamp DESC LIMIT 1) as last_msg_type
     FROM chats c
     WHERE c.archived = 0
       AND c.jid != 'status@broadcast'
@@ -338,6 +348,10 @@ export function initQueries(db: DbInstances): StoreQueries {
 
     clearUnread(jid: string) {
       clearUnreadStmt.run(jid);
+    },
+
+    incrementUnread(jid: string) {
+      incrementUnreadStmt.run(jid);
     },
 
     upsertGroupParticipants(groupJid, participants) {

@@ -3,6 +3,7 @@ import { useTheme, type Theme } from "../theme.tsx";
 import { useAppStore } from "../state.tsx";
 import { IMAGE_MEDIA_TYPES } from "../image.ts";
 import type { MessageRow } from "../../store/queries.ts";
+import { mediaLabel as mediaTypeLabel } from "../../wa/message-types.ts";
 
 function senderColorFromName(name: string, colors: string[]): string {
   let hash = 0;
@@ -28,14 +29,7 @@ function receiptStyle(status: number, t: Theme): { glyph: string; color: string 
 }
 
 function mediaLabel(type: string): string {
-  switch (type) {
-    case "imageMessage": return "[Image]";
-    case "videoMessage": return "[Video]";
-    case "audioMessage": return "[Audio]";
-    case "stickerMessage": return "[Sticker]";
-    case "documentMessage": return "[Document]";
-    default: return `[${type}]`;
-  }
+  return `[${mediaTypeLabel(type) || type}]`;
 }
 
 function formatDateSeparator(ts: number): string {

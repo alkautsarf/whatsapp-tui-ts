@@ -2,11 +2,13 @@ import {
   getContentType,
   type WASocket,
   type WAMessage,
+  type WAMessageKey,
 } from "@whiskeysockets/baileys";
 import type { StoreQueries, ContactRow, ChatRow, MessageRow } from "../store/queries.ts";
 import type { ReactiveBridge } from "../ui/state.tsx";
 import { log, warn } from "../utils/log.ts";
 import { cacheRawMessage } from "./media.ts";
+import { MEDIA_TYPES, SKIP_MESSAGE_TYPES } from "./message-types.ts";
 
 // ── Converters ──────────────────────────────────────────────────────
 
@@ -51,17 +53,6 @@ function convertChat(c: any): ChatRow {
     lid_jid: c.lidJid ?? c.accountLid ?? null,
   };
 }
-
-const MEDIA_TYPES = new Set([
-  "imageMessage", "videoMessage", "audioMessage",
-  "stickerMessage", "documentMessage",
-]);
-
-const SKIP_MESSAGE_TYPES = new Set([
-  "protocolMessage", "senderKeyDistributionMessage",
-  "associatedChildMessage", "reactionMessage", "pollUpdateMessage",
-  "editedMessage", "keepInChatMessage",
-]);
 
 function convertMessage(msg: WAMessage): MessageRow | null {
   if (!msg?.key?.id || !msg.key.remoteJid) return null;
@@ -201,8 +192,13 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
 
   // Messages — real-time
   sock.ev.on("messages.upsert", ({ messages: msgs, type }) => {
+    // Collect read-receipt keys for messages in the chat the user is currently
+    // viewing — sent in one batched call after the loop. Without this WA keeps
+    // pushing chats.update with unreadCount>0 and the badge ghosts back.
+    const readKeys: WAMessageKey[] = [];
+    const viewingJid = bridge?.getViewJid?.() ?? null;
+
     for (const msg of msgs) {
-      // Cache raw WAMessage for media download (works for own + received)
       if (msg.message && msg.key?.id) cacheRawMessage(msg);
 
       const row = convertMessage(msg);
@@ -210,11 +206,10 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
 
       if (SKIP_MESSAGE_TYPES.has(row.type)) continue;
 
-      // Resolve LID → phone JID for proper chat association
       const rawChatJid = msg.key.remoteJid;
       if (rawChatJid) {
         const chatJid = resolveJid(rawChatJid, store);
-        row.chat_jid = chatJid; // fix before inserting
+        row.chat_jid = chatJid;
         store.insertMessage(row);
         store.upsertChat({
           jid: chatJid,
@@ -222,6 +217,16 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
           is_group: chatJid.endsWith("@g.us") ? 1 : 0,
         });
         bridge?.onNewMessage(row, chatJid);
+
+        if (row.from_me === 0 && viewingJid === chatJid) {
+          readKeys.push({
+            remoteJid: chatJid,
+            id: row.id,
+            participant: chatJid.endsWith("@g.us")
+              ? (row.sender_jid ?? undefined)
+              : undefined,
+          });
+        }
       } else {
         store.insertMessage(row);
       }
@@ -229,6 +234,10 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
       const name = msg.pushName ? ` (${msg.pushName})` : "";
       const textPreview = row.text ? `: ${row.text.slice(0, 60)}` : "";
       log("msg", `${row.type} from ${row.sender_jid ?? "me"}${name}${textPreview}`);
+    }
+
+    if (readKeys.length > 0) {
+      sock.readMessages(readKeys).catch(() => {});
     }
   });
 
