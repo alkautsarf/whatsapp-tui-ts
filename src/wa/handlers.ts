@@ -202,6 +202,22 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
       row.jid = resolveJid(row.jid, store);
       return row;
     });
+    // Unread double-count fix: WA's chats.update unreadCount already includes
+    // the message that's about to arrive via messages.upsert, then state.tsx
+    // onNewMessage adds +1 on top, giving us 2× for every incoming message.
+    // Trust the local state.tsx counter as the source of truth for new
+    // messages. Special case: if WA explicitly reports unreadCount === 0,
+    // that means the user marked-as-read on another device — propagate the
+    // clear locally too so cross-device read sync still works.
+    for (let i = 0; i < rows.length; i++) {
+      const explicitlyZero = (updates[i] as any).unreadCount === 0;
+      if (explicitlyZero) {
+        store.clearUnread(rows[i]!.jid);
+      }
+      // Setting to 0 makes upsertChat preserve existing (the SQL CASE WHEN
+      // excluded.unread > 0 falls through to chats.unread when the value is 0).
+      rows[i]!.unread = 0;
+    }
     store.bulkUpsertChats(rows);
     if (rows.length > 0) bridge?.onChatUpdate(rows[0]!);
   });
@@ -275,7 +291,28 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
             const isGroup = chatJid.endsWith("@g.us");
             const chatName = chatRow?.name ?? store.resolveContactName(chatJid);
             const messageText = row.text ?? mediaLabel(row.type) ?? "[message]";
-            const senderName = msg.pushName ?? null;
+            // Group sender name: prefer the user's address book name (via
+            // contacts table) over WhatsApp's pushName. The participant JID
+            // for group messages lives at msg.key.participant; for DMs it's
+            // undefined and we never enter this branch anyway.
+            //
+            // Truncate to keep the message text visible in macOS notifications
+            // — a long sender name can otherwise push the body off-screen.
+            let senderName: string | null = null;
+            if (isGroup) {
+              const participantJid = msg.key.participant;
+              if (participantJid) {
+                const resolved = store.resolveContactName(participantJid);
+                senderName = (resolved && resolved !== participantJid.split("@")[0])
+                  ? resolved
+                  : (msg.pushName ?? resolved);
+              } else {
+                senderName = msg.pushName ?? null;
+              }
+              if (senderName && senderName.length > 20) {
+                senderName = senderName.slice(0, 19) + "\u2026";
+              }
+            }
             const body = isGroup && senderName
               ? `${senderName}: ${messageText}`
               : messageText;
@@ -351,12 +388,44 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
 
   sock.ev.on("group-participants.update", (event) => {
     const { id: groupJid, participants, action } = event;
+    // baileys' participants field is technically GroupParticipant[] (objects
+    // with .id) but in practice for the update event it can be string[]. Be
+    // defensive: extract the id either way.
+    const participantIds: string[] = (participants as any[]).map((p) =>
+      typeof p === "string" ? p : p?.id ?? "",
+    ).filter(Boolean);
+
     if (action === "remove") {
-      store.removeGroupParticipants(groupJid, participants);
+      // If the user themselves was removed from this group, prune the chat
+      // row + all messages so it doesn't linger as a ghost. Otherwise we'd
+      // accumulate stale group entries forever every time we leave or get
+      // kicked from a group. Compare against both phone JID (with the device
+      // suffix stripped) and LID forms of our identity.
+      const me = sock.user?.id;
+      const myLid = (sock.user as any)?.lid as string | undefined;
+      const myPhone = me ? me.split(":")[0] + "@s.whatsapp.net" : null;
+      const myLidBase = myLid ? myLid.split(":")[0] + "@lid" : null;
+
+      const removedSelf = participantIds.some((p) => {
+        if (!p) return false;
+        if (p === me) return true;
+        if (myPhone && p === myPhone) return true;
+        if (myLid && p === myLid) return true;
+        if (myLidBase && p === myLidBase) return true;
+        return false;
+      });
+
+      if (removedSelf) {
+        log("groups", `Pruning chat row for ${groupJid} — self removed`);
+        store.deleteChat(groupJid);
+        bridge?.onChatUpdate({ jid: groupJid } as ChatRow);
+      } else {
+        store.removeGroupParticipants(groupJid, participantIds);
+      }
     } else {
       store.upsertGroupParticipants(
         groupJid,
-        participants.map((p) => ({
+        participantIds.map((p) => ({
           group_jid: groupJid,
           user_jid: p,
           role: action === "promote" ? "admin" : null,

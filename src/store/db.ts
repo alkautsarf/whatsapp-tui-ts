@@ -8,7 +8,7 @@ export interface DbInstances {
   reader: Database;
 }
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS contacts (
@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS messages (
   thumbnail  TEXT,
   quoted_id  TEXT,
   status     INTEGER NOT NULL DEFAULT 0,
-  push_name  TEXT
+  push_name  TEXT,
+  react_emoji TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_messages_chat_ts ON messages(chat_jid, timestamp DESC);
 
@@ -148,6 +149,13 @@ function migrate(writer: Database) {
     addCol("width", "INTEGER");
     addCol("height", "INTEGER");
     addCol("thumbnail", "TEXT");
+  }
+
+  if (current < 3) {
+    // v3: react_emoji column on messages — stores the latest emoji reaction
+    // for a message (one-per-message, last-write-wins). Used by both incoming
+    // reaction events and the user's own reactions sent via the `e` key.
+    try { writer.run(`ALTER TABLE messages ADD COLUMN react_emoji TEXT`); } catch {}
   }
 
   if (current < SCHEMA_VERSION) {

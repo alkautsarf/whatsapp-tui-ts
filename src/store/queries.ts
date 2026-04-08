@@ -47,6 +47,7 @@ export interface MessageRow {
   quoted_id?: string | null;
   status: number;
   push_name?: string | null;
+  react_emoji?: string | null;
 }
 
 export interface GroupParticipantRow {
@@ -69,6 +70,14 @@ export interface StoreQueries {
   bulkUpsertContacts(contacts: ContactRow[]): void;
   bulkUpsertChats(chats: ChatRow[]): void;
   bulkInsertMessages(messages: MessageRow[]): void;
+  /** Delete a chat row + all its messages + group participants. Used when
+   * the user is removed from a group, or for ghost-chat cleanup. */
+  deleteChat(jid: string): void;
+  /** Mark a message as locally deleted — clears text/media but keeps the
+   * row so the bubble shows "[deleted]" in the conversation. */
+  markMessageDeleted(id: string): void;
+  /** Set the local reaction emoji on a message. Empty string clears it. */
+  setReaction(id: string, emoji: string): void;
 
   // Read
   listChats(limit?: number): ChatRow[];
@@ -127,11 +136,31 @@ export function initQueries(db: DbInstances): StoreQueries {
   `);
 
   const clearUnreadStmt = writer.prepare(`
-    UPDATE chats SET unread = 0 WHERE jid = ?1
+    UPDATE chats SET unread = 0 WHERE jid = ?1 AND unread != 0
   `);
 
   const incrementUnreadStmt = writer.prepare(`
     UPDATE chats SET unread = COALESCE(unread, 0) + 1 WHERE jid = ?1
+  `);
+
+  const deleteChatStmt = writer.prepare(`DELETE FROM chats WHERE jid = ?1`);
+  const deleteMessagesForChatStmt = writer.prepare(`DELETE FROM messages WHERE chat_jid = ?1`);
+  const deleteParticipantsForGroupStmt = writer.prepare(`DELETE FROM group_participants WHERE group_jid = ?1`);
+
+  const markMessageDeletedStmt = writer.prepare(`
+    UPDATE messages
+       SET text = '[deleted]',
+           media_type = NULL,
+           media_path = NULL,
+           media_url = NULL,
+           media_key = NULL,
+           direct_path = NULL,
+           thumbnail = NULL
+     WHERE id = ?1
+  `);
+
+  const setReactionStmt = writer.prepare(`
+    UPDATE messages SET react_emoji = ?1 WHERE id = ?2
   `);
 
   const insertMsgStmt = writer.prepare(`
@@ -212,7 +241,7 @@ export function initQueries(db: DbInstances): StoreQueries {
     SELECT id, chat_jid, sender_jid, from_me, timestamp, type, text,
            media_type, media_path, media_key, direct_path, media_url,
            mimetype, file_name, file_size, width, height, thumbnail,
-           quoted_id, status, push_name
+           quoted_id, status, push_name, react_emoji
     FROM messages
     WHERE (chat_jid = ?1 OR chat_jid = ?2)
       AND (?3 = 0 OR timestamp < ?3)
@@ -226,7 +255,7 @@ export function initQueries(db: DbInstances): StoreQueries {
     SELECT id, chat_jid, sender_jid, from_me, timestamp, type, text,
            media_type, media_path, media_key, direct_path, media_url,
            mimetype, file_name, file_size, width, height, thumbnail,
-           quoted_id, status, push_name
+           quoted_id, status, push_name, react_emoji
     FROM messages
     WHERE (chat_jid = ?1 OR chat_jid = ?2)
       AND text IS NOT NULL
@@ -317,7 +346,10 @@ export function initQueries(db: DbInstances): StoreQueries {
     for (let i = 0; i < items.length; i += CHUNK) {
       const end = Math.min(i + CHUNK, items.length);
       writer.transaction(() => {
-        for (let j = i; j < end; j++) fn(items[j]);
+        for (let j = i; j < end; j++) {
+          const item = items[j];
+          if (item !== undefined) fn(item);
+        }
       })();
     }
   }
@@ -421,6 +453,22 @@ export function initQueries(db: DbInstances): StoreQueries {
       });
     },
 
+    deleteChat(jid) {
+      writer.transaction(() => {
+        deleteMessagesForChatStmt.run(jid);
+        deleteParticipantsForGroupStmt.run(jid);
+        deleteChatStmt.run(jid);
+      })();
+    },
+
+    markMessageDeleted(id) {
+      markMessageDeletedStmt.run(id);
+    },
+
+    setReaction(id, emoji) {
+      setReactionStmt.run(emoji, id);
+    },
+
     listChats(limit = 50) {
       return listChatsStmt.all(limit);
     },
@@ -465,7 +513,11 @@ export function initQueries(db: DbInstances): StoreQueries {
       // Then try direct JID lookup
       const byJid = resolveNameStmt.get(jid)?.resolved;
       if (byJid && byJid !== jid) return byJid;
-      return jid.split("@")[0];
+      // Fall back to the bare id portion of the JID. `split("@")[0]` is
+      // technically `string | undefined` under noUncheckedIndexedAccess
+      // but the regex split always returns at least one element, so we
+      // assert it.
+      return jid.split("@")[0] ?? jid;
     },
 
     searchContacts(query) {

@@ -4,6 +4,65 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] - 2026-04-08
+
+### Added
+
+- **Forward messages** with `f` in NORMAL mode on a selected message. Opens a target-chat picker overlay (search/Enter to pick). Three send paths in priority order: cached raw `WAMessage` from the LRU (cleanest, baileys' built-in `forward` field, no re-upload), media re-download via `media_key` + `direct_path` for older media that's been evicted from the 200-message cache (re-sent as fresh media, caption preserved), and finally a synthesized text-only `WAMessage` for older text. Toast clarifies which path was taken on failure.
+- **Delete message** with `d` in NORMAL mode on a selected message. Confirmation modal offers "Delete for me" (local-only `markMessageDeleted` — sets text to `[deleted]`, clears media columns), "Delete for everyone" (only when `from_me=1` and within WhatsApp's 2-hour window — sends `sock.sendMessage(jid, { delete: key })` then marks locally), and Cancel.
+- **Save media** with `s` in NORMAL mode on a selected media message. Confirmation modal asks "Save \<filename\> to ~/Downloads/wa-tui/?". Auto-downloads via `downloadAndCache` if `media_path` is null (image only had a thumbnail). `basename()` guard on the destination filename prevents path traversal from a malicious sender's `documentMessage.fileName`. Toast progresses: `Downloading media…` → `Saved to ~/Downloads/wa-tui/<name>`.
+- **React to messages** with `e` in NORMAL mode on a selected message. Opens the existing emoji picker in "react" mode. On pick: `sock.sendMessage(jid, { react: { text, key } })` + `queries.setReaction(msgId, emoji)` to persist locally + chat refresh so the bubble shows the emoji immediately. WA doesn't echo our own reactions back via `messages.upsert`, so the local persist is necessary. Schema migrated to v3 with new `react_emoji TEXT` column on the `messages` table.
+- **Contact / group info overlay** via `gi` chord in NORMAL mode. For DMs: display name + bare phone/id (no `@suffix`) + `sock.fetchStatus()` status text. For groups: name + bare id + `sock.groupMetadata()` description (capped to 6 wrapped lines with `… (see WhatsApp app for full description)` indicator) + member count + scrollable participant list with admin marker (★). Backfills the local `group_participants` table on each successful metadata fetch so the next open is instant.
+- **Auto-fetch group participants on chat open**: `app.tsx onSelectChat` calls `sock.groupMetadata(jid)` when entering a group with empty `group_participants`. Pre-populates the table so the mention picker has data on first open without needing to open the info overlay first.
+- **Mention picker for groups**: in groups, `@` opens a participant picker (DMs keep `@` as the file picker — context-aware). The picker shows `[@] Display Name  62812345678` in a dropdown above the input. Picking inserts `@<sanitized-name>` (e.g. `@chris_2` — spaces → `_`, non-word chars stripped) so the user sees a human-readable token instead of raw digits. Send-time conversion via `finalizeMentions(text)` walks the visible text, rewrites every `@<sanitized-name>` to `@<bare-id>` (WA's wire format), and returns the JID list for the `mentions: []` baileys field. Sorts tokens by length DESC so longer names match before prefixes; disambiguates same-name collisions by appending the bare id. Caption mentions in media sends also threaded through `sendAttachmentsWithCaption` → `sendMedia`.
+- **`@/path` and `@~/path` in groups** falls through to the file picker. Groups can still use `@` to attach files even though `@` defaults to mentions there.
+- **Mention rendering on display**: `messages.tsx` resolves `@<digits>` tokens via `queries.resolveContactName()` (tries `<digits>@s.whatsapp.net`, falls back to `<digits>@lid`) before passing to `MessageBubble` as a new `resolvedText` prop. The bubble uses `resolvedText` for both the main content and the image caption row. Chat list preview also runs the same resolver. Both layers cache resolved text per `(id, text)` / `(jid, text)` so the per-render hot path stays cheap.
+- **Trailing path drag-drop detection**: `extractTrailingPath()` detects a file path drag-dropped at the END of an existing input (handles single-quoted, double-quoted, backslash-escaped, plain absolute, tilde-expanded). Replaces just the path portion with `[Image N]`, preserving any preceding text (mentions, partial caption). Critical for groups where the user has typed mentions first and then wants to drop in a file.
+- **File picker accept produces `[Image N]` placeholder**: picking a file from the `@/path` completion now uses the attachment registry instead of inserting the raw `@<full-path>`. Same registry path as Ctrl+V and drag-drop. Cleaner visual + routes through the primary placeholder send pipeline, bypassing the legacy matcher entirely.
+- **Restart command** in the `Ctrl+P` command palette. Releases the PID lock, spawns a detached child via `spawn(process.argv0, process.argv.slice(1), { detached: true, stdio: 'ignore' }).unref()`, then `process.exit(0)`. The detached child re-acquires the lock cleanly.
+- **Auto-prune chat row on self-removal from group**: `group-participants.update` handler now detects when the removed participant matches `sock.user.id` (or its phone / LID base forms) and deletes the chat row + messages + group_participants. Stops stale ghost group rows from accumulating after leave / kick events.
+- **Generic confirm modal** at `src/ui/overlays/confirm.tsx` — title, message, options[], dispatch via `intent` field on the overlay payload. Used by delete and save; reusable for future destructive actions.
+- **Toast feedback** on yank ("Copied to clipboard" / "Nothing to copy"), reply set ("Replying: \<resolved preview\>"), reply cleared ("Reply cleared" — Esc from insert with reply set, before exiting insert mode).
+
+### Fixed
+
+- **Unread "always 2" double-count**. Root cause: baileys' `chats.update` event delivered `c.unreadCount` that already included the message about to arrive via `messages.upsert`, then `state.tsx onNewMessage` added another `+1` on top. Two paths racing, both adding 1, so every chat where both fired ended up at 2. Fixed in `handlers.ts chats.update`: force `row.unread = 0` before `bulkUpsertChats` so the SQL CASE preserves the local count. Special case kept: explicit `unreadCount === 0` from WA (= read on another device) still propagates as a `clearUnread` so cross-device read sync works. Verified empirically against elpabl0's DB histogram (`80@1, 24@2, 14@3, 9@4, ...`) which exactly matches the "two paths racing" pattern.
+- **Search overlay cursor sync**: `selectChat()` in `state.tsx` now also sets `highlightedChatJid` so picking a chat from search (or any other jump path) moves the chat-list cursor to the picked row. Previously the cursor stayed wherever it was, so backing out of a chat landed on a different row than expected.
+- **Group notification sender uses contact name + truncated**: `handlers.ts` notification gate now resolves `msg.key.participant` via `store.resolveContactName()` instead of using WhatsApp's `pushName` (which is the sender's profile name, not the user's address-book name). Sender name truncated to 20 chars in the notification body so the actual message text stays visible in macOS notifications.
+- **Confirm modal payload null bug**: confirm.tsx and forward.tsx were calling `close()` BEFORE the user-provided `onPick` callback. `close()` nulls `store.overlay`, so the dispatcher (which reads `store.overlay.confirm` / `store.overlay.forwardSourceMsgId`) got a null payload and silently no-op'd. Fixed by capturing the picked value and calling the callback first, then closing. This unblocked delete, save, AND forward in one fix.
+- **Forward false-success toast**: media path was firing the success toast synchronously after a fire-and-forget `sendMedia()`, hiding upload errors. Now `await`s.
+- **`gi` chord ordering**: was firing `i` (insert mode) first because the chord check came after the generic `i` handler. Reordered.
+- **Image caption mention rendering**: caption row in `message-bubble.tsx` was rendering `props.message.text` directly instead of the upstream-resolved version. Now uses `props.resolvedText ?? props.message.text` like the main content row.
+- **`selectChat` losing loaded message history**: was unconditionally replacing `store.messages[jid]` with the latest 100 fetched from DB. Re-entering a chat after `gg`-loading older messages then made search say "found in history but not loaded yet" because the in-memory slice was back to 100. Now merges: if existing has more than 100, fetches the latest 100 and dedup-merges by id while preserving the older ones (sort by timestamp DESC).
+- **`legacy @path` matcher tightened**: regex was `/@(\S+)/` which matched `@chris_2` (a mention token) before the actual file path in inputs like `@chris_2 @/Users/.../file.jpg`. Now requires `/` or `~/` prefix: `/@((?:\/|~\/)\S+)/`.
+- **Group desc overflow**: capped to 6 wrapped lines with truncation indicator so long group rules blocks don't push past the modal border.
+- **Cursor blinking inside confirm/info overlays**: hidden focus-capture input was visible. Moved into a `position="absolute" top={-100} left={-100}` box.
+- **`presence.update` events**: already fixed in v0.4.12, no further change needed in v0.5.0.
+- **Self-sent reactions don't show locally**: WA doesn't echo our own reactions back via `messages.upsert`. After sending, `setReaction(msgId, emoji)` persists locally and `selectChat(jid)` re-pulls so the bubble shows immediately.
+- **Group info members 0**: was reading from local `group_participants` which could be empty for groups we never received `groups.upsert` for. Now fetches via `sock.groupMetadata(jid)` and uses the live participants list, falling back to local DB only when the live fetch is empty. Backfills the local table on each successful fetch.
+- **Reply/save preview shows raw `@<digits>`**: now resolves via `resolveMentionDisplay` so the toast and confirm modal preview show `@chris 2` instead of `@107838240207070`.
+- **`Ctrl+P` palette arrow scroll**: with the new entries the list overflowed the modal and arrow-down past the visible area didn't scroll. Now the scrollbox uses `scrollChildIntoView(\`palette-${idx}\`)` on each navigation step.
+- **`Ctrl+P` palette typing / arrow nav not reaching the input**: opening the palette didn't switch mode to "search", so the global keyboard handler kept eating Down/Up (routing to messages scroll) and typed letters never reached the focused input. Now `Ctrl+P` sets `mode = "search"` like the other overlays so global keys pass through. Close path resets to "normal".
+- **Restart command broke the terminal display**: `spawn-detached` doesn't give the new TUI a controlling PTY, so the child rendered to nowhere while the parent's terminal returned to the shell — leaving stale chrome on screen and no live wa-tui. Replaced with a shell-loop pattern: the in-app restart now exits with sentinel code 42, and `bin/wa` loops on that code to respawn cleanly with a real PTY. Direct `bun run src/index.tsx` invocations (no wrapper) just exit and require manual relaunch.
+
+### Security
+
+- **Path traversal in save-media destination filename**: `msg.file_name` comes straight from the sender's `documentMessage.fileName`. A malicious contact could send a file named `../../../Library/something.txt` and the save would write outside `~/Downloads/wa-tui/`. Wrapped destination name in `basename()` to strip path separators.
+
+### Changed
+
+- **Schema migration v2 → v3**: added `react_emoji TEXT` column on `messages` table (idempotent ALTER TABLE in `db.ts migrate()`).
+- **`storeQueries` additions**: `deleteChat(jid)` (cascading delete in transaction), `markMessageDeleted(id)`, `setReaction(id, emoji)`. SELECT statements pull `react_emoji`.
+- **`clearUnreadStmt`** now has `AND unread != 0` guard so re-applying the clear is a true no-op (no WAL churn on repeat syncs).
+- **Help (`?`) overlay** updated with all new bindings (`d`, `s`, `e`, `f`, `gi`, plus context-aware `@` description).
+- **`Ctrl+P` command palette** updated with new entries (Delete, Save, React, Forward, Show chat info, Restart wa-tui, Show help).
+- **Pre-existing TypeScript errors fixed**: `runInChunks` undefined index access, `resolveContactName` return type, `<Show>` `img` Accessor type, and `qrcode-terminal` ambient module declaration. Project now type-checks clean (zero errors).
+- **Code reuse**: `resolveMentionDisplay()` and `truncate()` extracted into `src/utils/text.ts` (deduped from `messages.tsx`, `chat-list.tsx`, `info.tsx`, `app.tsx`). Mention resolution is cached per `(id, text)` / `(jid, text)` to keep the per-render hot path cheap.
+
+### Data cleanup (one-time, elpabl0's local DB)
+
+- Deleted 5 ghost group rows + 10 stale messages (Buweel 🎱, BizPrivate #1, Libra Billiard & Cafe, Mi Casa Billiard & Cafe ×2). Backed up to `chats_backup_ghosts_apr8` + `messages_backup_ghosts_apr8` tables. Mi Casa Billiard Family kept (user confirmed membership).
+
 ## [0.4.13] - 2026-04-07
 
 ### Fixed
@@ -329,6 +388,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.5.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.0
 [0.4.4]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.4
 [0.4.3]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.3
 [0.4.2]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.2

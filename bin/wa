@@ -1,4 +1,14 @@
 #!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${SCRIPT_DIR}"
-exec bun run src/index.tsx "$@"
+
+# Loop on exit code 42 — that's the "restart requested" sentinel the
+# in-app Ctrl+P → "Restart wa-tui" command exits with. Any other exit
+# (0, Ctrl+C, error) breaks the loop and returns control to the shell.
+while true; do
+  bun run src/index.tsx "$@"
+  code=$?
+  if [ "$code" -ne 42 ]; then
+    exit "$code"
+  fi
+done

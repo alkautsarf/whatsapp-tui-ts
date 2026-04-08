@@ -4,6 +4,7 @@ import { useTheme } from "../theme.tsx";
 import { MessageBubble, type BubbleProps } from "./message-bubble.tsx";
 import { HIDDEN_MESSAGE_TYPES as HIDDEN_TYPES } from "../image.ts";
 import { mediaLabel } from "../../wa/message-types.ts";
+import { resolveMentionDisplay } from "../../utils/text.ts";
 import type { StoreQueries, MessageRow } from "../../store/queries.ts";
 
 interface GroupedMessage {
@@ -12,6 +13,27 @@ interface GroupedMessage {
   showDate: boolean;
   senderName: string;
   quotedText: string | null;
+  /** Display text with @<bare-id> mention tokens resolved to contact names. */
+  resolvedText: string | null;
+}
+
+/** Per-process cache so the regex + per-token DB lookups in
+ *  resolveMentionDisplay don't run on every reactive tick. Keyed by
+ *  `${msg.id}|${text}` so a deletion or edit invalidates the entry. */
+const mentionResolveCache = new Map<string, string>();
+function getResolvedMentionText(msg: MessageRow, queries: StoreQueries): string | null {
+  if (!msg.text) return null;
+  const key = `${msg.id}|${msg.text}`;
+  const cached = mentionResolveCache.get(key);
+  if (cached !== undefined) return cached;
+  const resolved = resolveMentionDisplay(msg.text, queries);
+  mentionResolveCache.set(key, resolved);
+  // Cap the cache so it doesn't grow unbounded across long sessions.
+  if (mentionResolveCache.size > 2000) {
+    const first = mentionResolveCache.keys().next().value;
+    if (first !== undefined) mentionResolveCache.delete(first);
+  }
+  return resolved;
 }
 
 function isSameDay(ts1: number, ts2: number): boolean {
@@ -72,7 +94,11 @@ export function Messages(props: { queries: StoreQueries; scrollRef?: (el: any) =
         }
       }
 
-      result.push({ message: msg, showSender, showDate, senderName, quotedText });
+      // Resolve `@<digits>` mention tokens to contact names for display.
+      // Cached per (id, text) so the per-tick re-render is cheap.
+      const resolvedText = getResolvedMentionText(msg, props.queries);
+
+      result.push({ message: msg, showSender, showDate, senderName, quotedText, resolvedText });
     }
 
     return result;
@@ -114,6 +140,7 @@ export function Messages(props: { queries: StoreQueries; scrollRef?: (el: any) =
                 <box id={`msg-${item.message.id}`}>
                 <MessageBubble
                   message={item.message}
+                  resolvedText={item.resolvedText}
                   showSender={item.showSender}
                   showDate={item.showDate}
                   senderName={item.senderName}

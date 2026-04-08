@@ -90,10 +90,33 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
 
   function selectChat(jid: string) {
     setStore("selectedChatJid", jid);
+    // Move the chat-list cursor to the picked chat too. Without this,
+    // jumping into a chat from the search overlay (or any other jump path)
+    // leaves the chat-list highlight wherever it was, so backing out lands
+    // in the wrong row.
+    setStore("highlightedChatJid", jid);
     setStore("selectedMessageIndex", 0);
     setStore("replyToMessageId", null);
-    const msgs = queries.getMessages(jid, 100);
-    setStore("messages", jid, msgs);
+
+    // Fetch the latest 100 messages and MERGE with whatever's already in
+    // the store for this chat. Without merging, every chat re-select would
+    // wipe the older history the user loaded via gg / loadMoreMessages and
+    // they'd have to re-load it before search could find anything.
+    const fresh = queries.getMessages(jid, 100);
+    const existing = store.messages[jid] ?? [];
+    if (existing.length > fresh.length) {
+      // We had more loaded than 100 (gg / loadMoreMessages happened).
+      // Merge by id to pick up any new live messages without dropping the
+      // older ones the user already loaded.
+      const seen = new Set(existing.map((m) => m.id));
+      const merged = [...fresh.filter((m) => !seen.has(m.id)), ...existing];
+      // Store is sorted timestamp DESC (latest first); keep that ordering.
+      merged.sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
+      setStore("messages", jid, merged);
+    } else {
+      setStore("messages", jid, fresh);
+    }
+
     const idx = store.chats.findIndex((c) => c.jid === jid);
     if (idx >= 0) {
       setStore("chats", idx, "unread", 0);

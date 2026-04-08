@@ -3,6 +3,7 @@ import { useAppStore } from "../state.tsx";
 import { useTheme } from "../theme.tsx";
 import type { StoreQueries } from "../../store/queries.ts";
 import { mediaLabel } from "../../wa/message-types.ts";
+import { resolveMentionDisplay, truncate } from "../../utils/text.ts";
 
 function formatTime(ts: number | null | undefined): string {
   if (!ts) return "";
@@ -25,8 +26,20 @@ function formatTime(ts: number | null | undefined): string {
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-function truncate(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max - 1) + "\u2026" : s;
+/** Per-row cache so the chat-list preview doesn't re-resolve mentions on
+ *  every reactive update. Keyed by `${jid}|${text}`. */
+const previewCache = new Map<string, string>();
+function cachedPreviewMentions(jid: string, text: string, queries: StoreQueries): string {
+  const key = `${jid}|${text}`;
+  const cached = previewCache.get(key);
+  if (cached !== undefined) return cached;
+  const resolved = resolveMentionDisplay(text, queries);
+  previewCache.set(key, resolved);
+  if (previewCache.size > 1000) {
+    const first = previewCache.keys().next().value;
+    if (first !== undefined) previewCache.delete(first);
+  }
+  return resolved;
 }
 
 export function ChatList(props: { queries: StoreQueries; scrollRef?: (el: any) => void }) {
@@ -70,7 +83,10 @@ export function ChatList(props: { queries: StoreQueries; scrollRef?: (el: any) =
 
               const preview = () => {
                 const text = chat.last_msg_text;
-                if (text) return truncate(text.replace(/\n/g, " "), 30);
+                if (text) {
+                  const resolved = cachedPreviewMentions(chat.jid, text, props.queries);
+                  return truncate(resolved.replace(/\n/g, " "), 30);
+                }
                 const label = mediaLabel(chat.last_msg_type);
                 if (label) return label;
                 if (chat.is_group) return "(group)";

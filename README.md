@@ -24,25 +24,41 @@ This is a TypeScript rewrite of the original [Rust whatsapp-tui](https://github.
 **Messaging**
 - Send + receive text, images, videos, audio, stickers, documents
 - Reply to any message (text or media) with proper quoted previews
+- Forward messages (`f`) — picker for any chat, full media re-upload for older messages
+- Delete messages (`d`) — for me (local-only) or for everyone (within WA's 2-hour window)
+- React to messages (`e`) — emoji picker, renders inline next to the timestamp
 - Auto-mark-read for the chat you're viewing
 - Delivery receipts and read status
-- Unread badges that don't ghost back
+- Unread badges that don't ghost back (no double-counting)
 
 **Media**
 - Inline image and sticker rendering via [phosphor-cli](https://github.com/alkautsarf/phosphor) (Kitty graphics protocol — works in Ghostty, kitty, WezTerm, and any tmux pane with `allow-passthrough on`)
 - `Enter` opens videos, audio, documents in your system viewer (QuickTime, Preview, etc.)
 - `@path` inline file completion for sending — type `@~/Downloads/`, get a fuzzy picker
+- Save any media (`s`) to `~/Downloads/wa-tui/` with a confirmation prompt
+- Drag-drop a file from Finder onto the input box (also works mid-message in groups)
+
+**Group features**
+- `@` opens a participant picker in groups, file picker in DMs (context-aware)
+- Mentions render as `@chris 2` locally (not raw `@628xxxxxxxxxxx`) and resolve correctly on the recipient's WhatsApp
+- `@/path` and `@~/path` in groups falls through to the file picker so you can still attach files via `@`
+- `gi` chord opens contact / group info: phone or member list, status text, group description, admin marker
 
 **Composing**
 - `Ctrl+G` opens `$EDITOR` for composing long messages, multi-line text, or anything you'd rather not type into a tiny input box
+- `Ctrl+E` opens an emoji picker
+- `Ctrl+V` paste image from clipboard
 - Long pastes show a truncated preview but preserve full text on send
-- Reply/quote any message, including media
+- Reply/quote any message, including media. `Esc` while composing clears the reply (cancel without sending).
 
 **Navigation**
 - `j/k` chat list navigation, `J/K` message list scroll
-- `/` search chats, `Ctrl+P` command palette
+- `/` search chats (or messages within the current chat when focused on messages)
+- `Ctrl+P` command palette (includes "Restart wa-tui" for in-app restart)
+- `?` keybinding reference overlay
 - `i/Esc` for INSERT/NORMAL modes
 - `gg/G` jump to top/bottom
+- `y` yank message text to clipboard (OSC 52, works through tmux)
 
 **Reliability**
 - Full history sync from baileys, persisted to local SQLite (WAL mode)

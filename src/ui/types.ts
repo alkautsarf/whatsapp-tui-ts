@@ -15,10 +15,53 @@ export interface ConnectionState {
   reconnectAttempt?: number;
 }
 
-export type OverlayType = "search" | "command-palette" | "help" | "emoji-picker" | "message-search";
+export type OverlayType =
+  | "search"
+  | "command-palette"
+  | "help"
+  | "emoji-picker"
+  | "message-search"
+  | "confirm"
+  | "info"
+  | "forward";
+
+export type ConfirmIntent = "delete-message" | "delete-message-everyone" | "save-media";
+
+export type ConfirmOptionValue =
+  | "delete-me"
+  | "delete-everyone"
+  | "save"
+  | "cancel";
+
+export interface ConfirmOption {
+  label: string;
+  value: ConfirmOptionValue;
+  /** Renders in a danger color (e.g. red) — used for delete actions. */
+  danger?: boolean;
+}
+
+export interface ConfirmPayload {
+  title: string;
+  message: string;
+  options: ConfirmOption[];
+  /** Identifies what to dispatch when an option is picked. */
+  intent: ConfirmIntent;
+  /** Free-form data passed back to the dispatcher (e.g. message id). */
+  data?: Record<string, any>;
+}
 
 export interface OverlayState {
   type: OverlayType;
+  /** Payload for type === "confirm" — title/message/options + dispatch intent. */
+  confirm?: ConfirmPayload;
+  /** For type === "emoji-picker": "insert" inserts at cursor (default),
+   *  "react" sends a reaction to targetMsgId instead. */
+  emojiPickIntent?: "insert" | "react";
+  emojiTargetMsgId?: string;
+  /** For type === "info": which chat to show info for. */
+  infoChatJid?: string;
+  /** For type === "forward": source message id to forward. */
+  forwardSourceMsgId?: string;
 }
 
 export interface InputMethods {

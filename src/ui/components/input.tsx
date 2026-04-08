@@ -6,8 +6,15 @@ import { useAppStore } from "../state.tsx";
 import { useTheme } from "../theme.tsx";
 import { tryExtractClipboardImageSync } from "../../utils/clipboard-image.ts";
 import { addAttachment, type AttachmentKind } from "../../utils/attachment-registry.ts";
+import { addMention } from "../../utils/mention-registry.ts";
 import type { StoreQueries } from "../../store/queries.ts";
 import type { InputMethods } from "../types.ts";
+
+interface MentionEntry {
+  kind: "mention";
+  jid: string;
+  displayName: string;
+}
 
 function kindFromExt(ext: string): AttachmentKind {
   const e = ext.toLowerCase();
@@ -77,6 +84,70 @@ function detectDroppedFilePath(text: string): string | null {
   }
 
   return expanded;
+}
+
+/**
+ * Detect a file path drag-dropped at the END of an input that already
+ * contains other text (e.g. mentions or a partial message). Used in
+ * groups where the @ key is reserved for the mention picker, so the only
+ * way to attach a file mid-message is to drop it from Finder.
+ *
+ * Returns the resolved path AND the start index in the original text so
+ * the caller can splice in the placeholder. Tries (in order):
+ *   - Trailing single-quoted: ... '/path/to/file.jpg'
+ *   - Trailing double-quoted: ... "/path/to/file.jpg"
+ *   - Trailing backslash-escaped or unquoted: ... /path/to/My\ File.jpg
+ */
+function extractTrailingPath(text: string): { path: string; start: number } | null {
+  // Helper to validate a candidate
+  const validate = (candidate: string): string | null => {
+    const expanded = candidate.startsWith("~")
+      ? (process.env.HOME || "") + candidate.slice(1)
+      : candidate;
+    try {
+      if (!existsSync(expanded)) return null;
+      if (!statSync(expanded).isFile()) return null;
+    } catch {
+      return null;
+    }
+    return expanded;
+  };
+
+  // Single-quoted trailing path
+  const sgl = text.match(/'([^']+)'\s*$/);
+  if (sgl) {
+    const expanded = validate(sgl[1]!);
+    if (expanded) {
+      const start = text.lastIndexOf(sgl[0]);
+      return { path: expanded, start };
+    }
+  }
+
+  // Double-quoted trailing path
+  const dbl = text.match(/"([^"]+)"\s*$/);
+  if (dbl) {
+    const expanded = validate(dbl[1]!);
+    if (expanded) {
+      const start = text.lastIndexOf(dbl[0]);
+      return { path: expanded, start };
+    }
+  }
+
+  // Unquoted trailing path: look for the LAST `/` or `~` and try the
+  // longest substring from there to the end. Handles backslash-escaped
+  // spaces — match runs of (escaped char | non-whitespace).
+  const plain = text.match(/(?:^|\s)((?:\/|~)(?:\\.|[^\s'"])+)\s*$/);
+  if (plain) {
+    const raw = plain[1]!;
+    const unescaped = raw.replace(/\\(.)/g, "$1");
+    const expanded = validate(unescaped);
+    if (expanded) {
+      const start = text.lastIndexOf(raw);
+      return { path: expanded, start };
+    }
+  }
+
+  return null;
 }
 
 function listFilesForQuery(query: string): FileEntry[] {
@@ -156,8 +227,52 @@ export function InputArea(props: {
   const [completionIdx, setCompletionIdx] = createSignal(0);
   const [completionAtPos, setCompletionAtPos] = createSignal(0);
 
+  // Whether the current chat is a group — drives whether @ opens a mention
+  // picker (group participants) or a file picker (DMs).
+  const isCurrentChatGroup = () =>
+    !!store.selectedChatJid && store.selectedChatJid.endsWith("@g.us");
+
+  // Tells the @ completion router whether the user is typing a file path.
+  // In groups `@` defaults to mentions, but `@/` or `@~/` is the user
+  // explicitly asking for the file picker (no other way to attach in groups
+  // with the @ shortcut).
+  const isFilePathQuery = (q: string) =>
+    q.startsWith("/") || q.startsWith("~");
+
+  const mentionItems = createMemo<MentionEntry[]>(() => {
+    if (!completionActive()) return [];
+    if (!isCurrentChatGroup()) return [];
+    // `@/` and `@~/` in a group is the user asking for the file picker —
+    // mention list should be empty so the file dropdown gets shown instead.
+    if (isFilePathQuery(completionQuery())) return [];
+    const jid = store.selectedChatJid;
+    if (!jid) return [];
+    const participants = props.queries.getGroupParticipants(jid);
+    const q = completionQuery().toLowerCase();
+    return participants
+      .map((p) => ({
+        kind: "mention" as const,
+        jid: p.user_jid,
+        displayName: props.queries.resolveContactName(p.user_jid),
+      }))
+      .filter((m) => {
+        if (!q) return true;
+        return (
+          m.displayName.toLowerCase().includes(q) ||
+          m.jid.toLowerCase().includes(q)
+        );
+      })
+      .slice(0, MAX_SUGGESTIONS);
+  });
+
   const completionItems = createMemo(() => {
     if (!completionActive()) return [];
+    // In group chats, @ opens the mention picker. Exception: if the query
+    // looks like a file path (starts with / or ~), fall through to the
+    // file picker so groups can still use @ to attach files.
+    if (isCurrentChatGroup() && !isFilePathQuery(completionQuery())) {
+      return [];
+    }
     return listFilesForQuery(completionQuery());
   });
 
@@ -265,8 +380,36 @@ export function InputArea(props: {
     try { textareaRef.focus(); } catch {}
   }
 
-  function acceptCompletion(entry?: FileEntry) {
-    const item = entry ?? completionItems()[completionIdx()];
+  function acceptCompletion(entry?: FileEntry | MentionEntry) {
+    // Group chat path — pick a mention IF the query isn't a file path.
+    // (`@/...` and `@~/...` in groups falls through to the file picker.)
+    const groupMode = isCurrentChatGroup() && !isFilePathQuery(completionQuery());
+    if (groupMode) {
+      const mentions = mentionItems();
+      const m = (entry as MentionEntry | undefined) ??
+        mentions[completionIdx()];
+      if (!m || !textareaRef) return;
+      const text: string = textareaRef.plainText ?? "";
+      const cursor: number = textareaRef.cursorOffset ?? text.length;
+      const atPos = completionAtPos();
+      const after = text.slice(cursor);
+      // addMention returns the visible "@<sanitized-name>" token (e.g.
+      // "@chris_2") and registers the full JID. The wire-format conversion
+      // happens at send time via finalizeMentions in layout.tsx.
+      const token = addMention(m.jid, m.displayName);
+      const replacement = token + " ";
+      const newText = text.slice(0, atPos) + replacement + after;
+      const newCursorPos = atPos + replacement.length;
+      try { textareaRef.replaceText(newText); } catch {
+        try { textareaRef.setText(newText); } catch {}
+      }
+      try { textareaRef.cursorOffset = newCursorPos; } catch {}
+      setCompletionActive(false);
+      return;
+    }
+
+    // DM (or group + path query) file picker path
+    const item = (entry as FileEntry | undefined) ?? completionItems()[completionIdx()];
     if (!item || !textareaRef) return;
 
     const text: string = textareaRef.plainText ?? "";
@@ -274,28 +417,37 @@ export function InputArea(props: {
     const atPos = completionAtPos();
     const after = text.slice(cursor);
 
-    // Build replacement: keep @ then add path (quote if spaces)
-    const hasSpaces = item.path.includes(" ") || item.name.includes(" ");
-    let replacement: string;
     if (item.isDir) {
-      replacement = hasSpaces ? `"${item.path}/` : item.path + "/";
-    } else {
-      replacement = hasSpaces ? `"${item.path}" ` : item.path + " ";
+      // Directory: keep `@` and continue browsing — same as before.
+      const hasSpaces = item.path.includes(" ") || item.name.includes(" ");
+      const replacement = hasSpaces ? `"${item.path}/` : item.path + "/";
+      const newText = text.slice(0, atPos) + "@" + replacement + after;
+      const newCursorPos = atPos + 1 + replacement.length;
+      try { textareaRef.replaceText(newText); } catch {
+        try { textareaRef.setText(newText); } catch {}
+      }
+      try { textareaRef.cursorOffset = newCursorPos; } catch {}
+      setTimeout(() => checkForCompletion(), 10);
+      return;
     }
-    const newText = text.slice(0, atPos) + "@" + replacement + after;
-    const newCursorPos = atPos + 1 + replacement.length;
+
+    // File: register in the attachment registry and replace the `@<query>`
+    // chunk with a `[Image N]` / `[File N]` placeholder. Matches the
+    // drag-drop and Ctrl+V flows so the input stays clean and the send
+    // pipeline goes through path 1 (placeholder parsing) instead of the
+    // legacy @path branch.
+    const ext = item.path.split(".").pop() ?? "";
+    const kind = kindFromExt(ext);
+    const label = addAttachment(item.path, kind);
+    // Replace from `@` (atPos) up to the cursor with the placeholder + space.
+    const replacement = `${label} `;
+    const newText = text.slice(0, atPos) + replacement + after;
+    const newCursorPos = atPos + replacement.length;
     try { textareaRef.replaceText(newText); } catch {
       try { textareaRef.setText(newText); } catch {}
     }
-    // Move cursor to end of inserted path
     try { textareaRef.cursorOffset = newCursorPos; } catch {}
-
-    if (item.isDir) {
-      // Keep completion open for continued navigation
-      setTimeout(() => checkForCompletion(), 10);
-    } else {
-      setCompletionActive(false);
-    }
+    setCompletionActive(false);
   }
 
   // --- Key handling ---
@@ -322,8 +474,13 @@ export function InputArea(props: {
       // No image in clipboard — let the event fall through.
     }
 
-    // @ completion navigation
-    if (completionActive() && completionItems().length > 0) {
+    // @ completion navigation. In groups, source is mentions UNLESS the
+    // query is a file path (then it's files); in DMs it's always files.
+    const inGroupMention = isCurrentChatGroup() && !isFilePathQuery(completionQuery());
+    const activeCount = inGroupMention
+      ? mentionItems().length
+      : completionItems().length;
+    if (completionActive() && activeCount > 0) {
       if (evt.name === "tab" || (evt.name === "return" && !evt.meta && !evt.ctrl)) {
         evt.preventDefault?.();
         evt.stopPropagation?.();
@@ -337,7 +494,7 @@ export function InputArea(props: {
       }
       if (evt.name === "down" || (evt.ctrl && evt.name === "n")) {
         evt.preventDefault?.();
-        const newIdx = Math.min(completionIdx() + 1, completionItems().length - 1);
+        const newIdx = Math.min(completionIdx() + 1, activeCount - 1);
         setCompletionIdx(newIdx);
         try { completionScrollRef?.scrollChildIntoView?.(`completion-${newIdx}`); } catch {}
         return;
@@ -377,23 +534,39 @@ export function InputArea(props: {
   function handleContentChange() {
     checkForCompletion();
 
-    // Drag-drop file detection. When the user drops a file from Finder onto
-    // the Ghostty window, the terminal "types" the path into the active
-    // textarea — usually with backslash-escaped spaces. If the entire input
-    // is just a valid file path that exists, register it in the attachment
-    // registry and replace the input with a `[Image N]` / `[File N]` etc.
-    // placeholder, matching the Ctrl+V paste flow. User can keep typing
-    // before/after the placeholder to add a caption.
+    // Drag-drop file detection. Two passes — whole-input drop (clean
+    // empty-input drop) and trailing-path drop (input already has text,
+    // typically mentions in front). Both register the file and substitute
+    // a `[Image N]` / `[File N]` placeholder; the trailing case replaces
+    // only the path portion so the preceding text survives.
     const text = textareaRef?.plainText ?? "";
+
     const droppedPath = detectDroppedFilePath(text);
     if (droppedPath) {
       const ext = droppedPath.split(".").pop() ?? "";
       const kind = kindFromExt(ext);
       const label = addAttachment(droppedPath, kind);
       const newText = `${label} `;
-      // Avoid infinite loop: only replace if the current text isn't already
-      // the placeholder form.
       if (text.trim() !== newText.trim()) {
+        try { textareaRef?.replaceText?.(newText); } catch {
+          try { textareaRef?.setText?.(newText); } catch {}
+        }
+        try { textareaRef.cursorOffset = newText.length; } catch {}
+      }
+      return;
+    }
+
+    const trailing = extractTrailingPath(text);
+    if (trailing) {
+      const ext = trailing.path.split(".").pop() ?? "";
+      const kind = kindFromExt(ext);
+      const label = addAttachment(trailing.path, kind);
+      // Splice in the placeholder where the path started, dropping the
+      // path itself. Trim any trailing space the prefix might have so we
+      // don't end up with double spaces.
+      const before = text.slice(0, trailing.start).replace(/\s*$/, "");
+      const newText = (before ? before + " " : "") + label + " ";
+      if (text !== newText) {
         try { textareaRef?.replaceText?.(newText); } catch {
           try { textareaRef?.setText?.(newText); } catch {}
         }
@@ -417,8 +590,46 @@ export function InputArea(props: {
 
   return (
     <Show when={store.selectedChatJid}>
-      {/* @ completion dropdown — rendered ABOVE the input box */}
-      <Show when={completionActive() && completionItems().length > 0}>
+      {/* @ completion dropdown — rendered ABOVE the input box. Group chats
+          show participant mentions, DMs show file picker entries. */}
+      <Show when={completionActive() && isCurrentChatGroup() && !isFilePathQuery(completionQuery()) && mentionItems().length > 0}>
+        <box
+          flexDirection="column"
+          border
+          borderStyle="rounded"
+          borderColor={theme.borderFocused}
+          backgroundColor={theme.bgOverlay}
+          height={Math.min(mentionItems().length + 2, VISIBLE_SUGGESTIONS + 2)}
+          paddingX={1}
+        >
+          <scrollbox
+            ref={(el: any) => (completionScrollRef = el)}
+            flexGrow={1}
+          >
+          <For each={mentionItems()}>
+            {(m, idx) => {
+              const isSel = () => idx() === completionIdx();
+              const bare = () => m.jid.split("@")[0] ?? m.jid;
+              return (
+                <box
+                  id={`completion-${idx()}`}
+                  flexDirection="row"
+                  paddingX={1}
+                  backgroundColor={isSel() ? theme.bgSelected : undefined}
+                >
+                  <text fg={theme.info}>{"[@] "}</text>
+                  <text fg={isSel() ? theme.textStrong : theme.text}>
+                    {m.displayName}
+                  </text>
+                  <text fg={theme.textMuted}>{"  " + bare()}</text>
+                </box>
+              );
+            }}
+          </For>
+          </scrollbox>
+        </box>
+      </Show>
+      <Show when={completionActive() && (!isCurrentChatGroup() || isFilePathQuery(completionQuery())) && completionItems().length > 0}>
         <box
           flexDirection="column"
           border

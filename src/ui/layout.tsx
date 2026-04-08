@@ -1,7 +1,7 @@
 import { Show } from "solid-js";
-import { existsSync, statSync } from "fs";
+import { existsSync, statSync, mkdirSync, copyFileSync } from "fs";
 import { readFile } from "fs/promises";
-import { basename } from "path";
+import { basename, join, extname } from "path";
 import { useAppStore } from "./state.tsx";
 import { useTheme } from "./theme.tsx";
 import { ChatList } from "./components/chat-list.tsx";
@@ -14,11 +14,15 @@ import { CommandPalette } from "./overlays/command-palette.tsx";
 import { HelpOverlay } from "./overlays/help.tsx";
 import { EmojiPicker } from "./overlays/emoji-picker.tsx";
 import { MessageSearchOverlay } from "./overlays/message-search.tsx";
+import { ConfirmModal } from "./overlays/confirm.tsx";
+import { ForwardOverlay } from "./overlays/forward.tsx";
+import { InfoOverlay } from "./overlays/info.tsx";
 import { log } from "../utils/log.ts";
-import { getRawMessage } from "../wa/media.ts";
+import { getRawMessage, downloadAndCache } from "../wa/media.ts";
 import { parsePlaceholders, clearPending, type PendingAttachment } from "../utils/attachment-registry.ts";
+import { finalizeMentions, clearMentions } from "../utils/mention-registry.ts";
 import type { StoreQueries } from "../store/queries.ts";
-import type { WASocket } from "@whiskeysockets/baileys";
+import type { WASocket, WAMessageKey } from "@whiskeysockets/baileys";
 import type { InputMethods } from "./types.ts";
 
 type MediaType = "image" | "video" | "audio" | "document" | "sticker";
@@ -87,19 +91,32 @@ export function Layout(props: {
     // actual files without exposing temp paths in the input box.
     const { attachments, textWithoutPlaceholders } = parsePlaceholders(text);
     if (attachments.length > 0) {
-      sendAttachmentsWithCaption(sock, jid, attachments, textWithoutPlaceholders);
+      // Group mentions in the caption: rewrite to wire format and pull JIDs
+      // BEFORE clearMentions wipes the registry.
+      let captionText = textWithoutPlaceholders;
+      let captionMentionJids: string[] = [];
+      if (jid.endsWith("@g.us") && captionText) {
+        const finalized = finalizeMentions(captionText);
+        captionText = finalized.text;
+        captionMentionJids = finalized.jids;
+      }
+      sendAttachmentsWithCaption(sock, jid, attachments, captionText, captionMentionJids);
       clearPending();
+      clearMentions();
       helpers.setReplyTo(null);
       props.onScrollToBottom?.();
       return;
     }
 
     // Path 2: legacy @path manual entry (still supported for power users
-    // who type paths directly with the @ syntax). Falls through to text
-    // send if no @ pattern matches a real file.
+    // who type paths directly with the @ syntax). The pattern MUST start
+    // with `/` or `~/` so we don't accidentally match `@chris_2` (a group
+    // mention token) as a file path. Falls through to text send if no
+    // @path pattern matches a real file.
     const dblQuoteMatch = text.match(/@"([^"]+)"/);
     const sglQuoteMatch = text.match(/@'([^']+)'/);
-    const plainMatch = text.match(/@(\S+)/);
+    // Path-only plain match: @ followed by `/` or `~/` then non-whitespace.
+    const plainMatch = text.match(/@((?:\/|~\/)\S+)/);
     const atMatch = dblQuoteMatch || sglQuoteMatch || plainMatch;
     if (atMatch) {
       const filePath = atMatch[1]!;
@@ -109,9 +126,18 @@ export function Layout(props: {
         // Remove the @path (quoted or plain) from text to get caption
         const atPattern = dblQuoteMatch ? /@"[^"]+"?\s?/
           : sglQuoteMatch ? /@'[^']+'?\s?/
-          : /@\S+\s?/;
-        const caption = text.replace(atPattern, "").trim() || undefined;
-        sendMedia(sock, jid, expanded, caption);
+          : /@(?:\/|~\/)\S+\s?/;
+        let caption = text.replace(atPattern, "").trim() || undefined;
+        // If the remaining caption text has group mentions, finalize them
+        // before sending so the recipient renders them correctly.
+        let captionMentions: string[] = [];
+        if (jid.endsWith("@g.us") && caption) {
+          const finalized = finalizeMentions(caption);
+          caption = finalized.text;
+          captionMentions = finalized.jids;
+        }
+        sendMedia(sock, jid, expanded, caption, captionMentions);
+        clearMentions();
         helpers.setReplyTo(null);
         props.onScrollToBottom?.();
         return;
@@ -119,7 +145,23 @@ export function Layout(props: {
     }
 
     const quotedId = store.replyToMessageId;
-    const content: any = { text };
+
+    // Group mentions: rewrite `@<sanitized-name>` tokens in the visible
+    // text to WA's wire format `@<bare-id>` and collect the resolved JIDs
+    // for the `mentions` array. Recipients' WhatsApp clients render the
+    // wire token as the contact's local display name.
+    let outgoingText = text;
+    let mentionJids: string[] = [];
+    if (jid.endsWith("@g.us")) {
+      const finalized = finalizeMentions(text);
+      outgoingText = finalized.text;
+      mentionJids = finalized.jids;
+    }
+
+    const content: any = { text: outgoingText };
+    if (mentionJids.length > 0) {
+      content.mentions = mentionJids;
+    }
     const msgOpts: any = {};
     if (quotedId) {
       // Prefer the cached raw WAMessage — Baileys needs the full protobuf
@@ -143,6 +185,7 @@ export function Layout(props: {
       }
     }
     sock.sendMessage(jid, content, msgOpts).catch(() => {});
+    clearMentions();
     helpers.setReplyTo(null);
     props.onScrollToBottom?.();
   }
@@ -162,10 +205,11 @@ export function Layout(props: {
     jid: string,
     attachments: PendingAttachment[],
     text: string,
+    mentionJids: string[] = [],
   ) {
     if (attachments.length === 1) {
       const att = attachments[0]!;
-      sendMedia(sock, jid, att.path, text || undefined);
+      sendMedia(sock, jid, att.path, text || undefined, mentionJids);
       return;
     }
 
@@ -176,7 +220,9 @@ export function Layout(props: {
     }
     if (text) {
       try {
-        await sock.sendMessage(jid, { text });
+        const trailing: any = { text };
+        if (mentionJids.length > 0) trailing.mentions = mentionJids;
+        await sock.sendMessage(jid, trailing);
       } catch (e) {
         log("media", `Trailing text send failed: ${(e as Error)?.message}`);
         helpers.showToast(`Trailing text failed: ${(e as Error)?.message ?? "unknown"}`, "error");
@@ -184,7 +230,7 @@ export function Layout(props: {
     }
   }
 
-  async function sendMedia(sock: WASocket, jid: string, filePath: string, caption?: string) {
+  async function sendMedia(sock: WASocket, jid: string, filePath: string, caption?: string, mentionJids: string[] = []) {
     const fileName = basename(filePath);
 
     try {
@@ -224,6 +270,11 @@ export function Layout(props: {
           content = { document: buffer, fileName, caption };
           break;
       }
+      // Carry through any mention JIDs from a caption that referenced
+      // group participants. Stickers and audio (no caption) don't get them.
+      if (mentionJids.length > 0 && type !== "sticker" && type !== "audio") {
+        content.mentions = mentionJids;
+      }
 
       log("media", `Sending ${type}: ${fileName} (${formatBytes(stat.size)})`);
       try {
@@ -239,6 +290,119 @@ export function Layout(props: {
       const msg = (e as Error)?.message ?? "unknown error";
       log("media", `Media send pipeline failed for ${fileName}: ${msg}`);
       helpers.showToast(`Cannot send ${fileName}: ${msg}`, "error", 8000);
+    }
+  }
+
+  // ── Confirm modal dispatcher ──────────────────────────────────────
+  // Maps the picked option value back to a real action based on the
+  // confirm payload's intent. Centralized here so the ConfirmModal stays
+  // a dumb UI component.
+  async function dispatchConfirm(value: string) {
+    const payload = store.overlay?.confirm;
+    if (!payload || value === "cancel") return;
+
+    if (payload.intent === "delete-message") {
+      const msgId = payload.data?.msgId as string | undefined;
+      const jid = payload.data?.jid as string | undefined;
+      if (!msgId || !jid) return;
+      const msg = props.queries.getMessage(msgId);
+      if (!msg) {
+        helpers.showToast("Message not found", "error", 3000);
+        return;
+      }
+
+      // delete-me must stay local — WA's tombstone propagates to the
+      // other party, which is the wrong semantic for "for me".
+      if (value === "delete-me") {
+        try {
+          props.queries.markMessageDeleted(msgId);
+          if (store.selectedChatJid === jid) helpers.selectChat(jid);
+          helpers.showToast("Deleted locally", "info", 2000);
+        } catch (e) {
+          helpers.showToast(`Local delete failed: ${(e as Error)?.message ?? "unknown"}`, "error", 4000);
+        }
+        return;
+      }
+
+      if (value === "delete-everyone") {
+        const sock = props.getSock();
+        if (!sock) {
+          helpers.showToast("Not connected", "error", 3000);
+          return;
+        }
+        const key: WAMessageKey = {
+          remoteJid: jid,
+          id: msgId,
+          fromMe: msg.from_me === 1,
+          participant: jid.endsWith("@g.us") ? (msg.sender_jid ?? undefined) : undefined,
+        };
+        try {
+          await sock.sendMessage(jid, { delete: key });
+          props.queries.markMessageDeleted(msgId);
+          if (store.selectedChatJid === jid) helpers.selectChat(jid);
+          helpers.showToast("Message deleted for everyone", "info", 2500);
+        } catch (e) {
+          helpers.showToast(`Delete failed: ${(e as Error)?.message ?? "unknown"}`, "error", 4000);
+        }
+        return;
+      }
+      return;
+    }
+
+    if (payload.intent === "save-media") {
+      const msgId = payload.data?.msgId as string | undefined;
+      if (!msgId) return;
+      const msg = props.queries.getMessage(msgId);
+      if (!msg) {
+        helpers.showToast("Message not found", "error", 3000);
+        return;
+      }
+
+      // Resolve the source path. Try msg.media_path first; if absent or the
+      // file doesn't exist, attempt an on-the-fly download via
+      // downloadAndCache (which uses the cached raw WAMessage or stored
+      // media_key + direct_path metadata).
+      let srcPath = msg.media_path;
+      if (!srcPath || !existsSync(srcPath)) {
+        const sock = props.getSock();
+        if (!sock) {
+          helpers.showToast("Not connected — can't fetch media", "error", 3000);
+          return;
+        }
+        helpers.showToast("Downloading media…", "info", 1500);
+        try {
+          srcPath = await downloadAndCache(sock, msg, props.queries);
+        } catch (e) {
+          helpers.showToast(`Download failed: ${(e as Error)?.message ?? "unknown"}`, "error", 4000);
+          return;
+        }
+        if (!srcPath || !existsSync(srcPath)) {
+          helpers.showToast("Media unavailable — too old or expired", "error", 4000);
+          return;
+        }
+      }
+
+      try {
+        const downloadsDir = join(process.env.HOME || "", "Downloads", "wa-tui");
+        mkdirSync(downloadsDir, { recursive: true });
+        // Use the original file name if WhatsApp gave us one, otherwise the
+        // cache filename (msgId.ext). basename() guards against path
+        // traversal — the sender controls `file_name` and could include
+        // `../` segments to write outside ~/Downloads/wa-tui/.
+        const rawName = msg.file_name && msg.file_name.length > 0
+          ? msg.file_name
+          : basename(srcPath);
+        const destName = basename(rawName);
+        const destPath = join(downloadsDir, destName);
+        copyFileSync(srcPath, destPath);
+        const displayPath = destPath.startsWith(process.env.HOME || "")
+          ? "~" + destPath.slice((process.env.HOME || "").length)
+          : destPath;
+        helpers.showToast(`Saved to ${displayPath}`, "info", 4000);
+      } catch (e) {
+        helpers.showToast(`Save failed: ${(e as Error)?.message ?? "unknown"}`, "error", 4000);
+      }
+      return;
     }
   }
 
@@ -291,8 +455,41 @@ export function Layout(props: {
       <Show when={store.overlay?.type === "emoji-picker"}>
         <EmojiPicker
           onPick={(char) => {
-            // Make sure we're back in INSERT mode + input focus so the
-            // emoji actually appears in the textarea.
+            const intent = store.overlay?.emojiPickIntent ?? "insert";
+            const targetMsgId = store.overlay?.emojiTargetMsgId;
+            if (intent === "react" && targetMsgId) {
+              // React mode — fire a reaction to the target message instead
+              // of inserting into the input. After picking, return to NORMAL
+              // mode + messages focus.
+              const sock = props.getSock();
+              const jid = store.selectedChatJid;
+              const msg = props.queries.getMessage(targetMsgId);
+              if (sock && jid && msg) {
+                const key: WAMessageKey = {
+                  remoteJid: jid,
+                  id: targetMsgId,
+                  fromMe: msg.from_me === 1,
+                  participant: jid.endsWith("@g.us") ? (msg.sender_jid ?? undefined) : undefined,
+                };
+                sock.sendMessage(jid, { react: { text: char, key } })
+                  .then(() => {
+                    // Persist the reaction locally so the message bubble
+                    // shows it right away. WA doesn't echo our own reactions
+                    // back via messages.upsert, so without this the user
+                    // would see the reaction on their phone but nothing in
+                    // the TUI.
+                    try { props.queries.setReaction(targetMsgId, char); } catch {}
+                    if (store.selectedChatJid === jid) helpers.selectChat(jid);
+                    helpers.showToast(`Reacted ${char}`, "info", 1500);
+                  })
+                  .catch((e) => helpers.showToast(`React failed: ${(e as Error)?.message ?? "unknown"}`, "error", 4000));
+              }
+              helpers.setMode("normal");
+              helpers.setFocusZone("messages");
+              return;
+            }
+            // Insert mode (default) — back to INSERT + input focus, then
+            // inject at cursor.
             helpers.setMode("insert");
             helpers.setFocusZone("input");
             localInputMethods?.insertAtCursor(char);
@@ -328,6 +525,107 @@ export function Layout(props: {
               );
             }
           }}
+        />
+      </Show>
+      <Show when={store.overlay?.type === "confirm" && store.overlay?.confirm}>
+        <ConfirmModal
+          payload={store.overlay!.confirm!}
+          onPick={(value) => dispatchConfirm(value)}
+        />
+      </Show>
+      <Show when={store.overlay?.type === "forward"}>
+        <ForwardOverlay
+          queries={props.queries}
+          onForward={(targetJid) => {
+            const sourceMsgId = store.overlay?.forwardSourceMsgId;
+            const sock = props.getSock();
+            if (!sourceMsgId || !sock) return;
+
+            const targetChat = store.chats.find((c) => c.jid === targetJid);
+            const targetName = targetChat?.name ?? props.queries.resolveContactName(targetJid);
+
+            // Try the LRU raw message cache first — gives us the full
+            // protobuf which baileys' `forward` handler uses to preserve
+            // media context (the cleanest path: same message bytes,
+            // no re-upload).
+            const rawMsg = getRawMessage(sourceMsgId);
+            if (rawMsg) {
+              sock
+                .sendMessage(targetJid, { forward: rawMsg as any })
+                .then(() => helpers.showToast(`Forwarded to ${targetName}`, "info", 2500))
+                .catch((e) =>
+                  helpers.showToast(`Forward failed: ${(e as Error)?.message ?? "unknown"}`, "error", 4000),
+                );
+              return;
+            }
+
+            // LRU evicted. Look up our DB row and decide:
+            //   - Media message → download via media_key/direct_path,
+            //     re-send as fresh media with caption (real forward
+            //     semantics for media that's older than 200 messages)
+            //   - Text only → synthesize a minimal WAMessage and forward
+            //     as text via baileys
+            const dbMsg = props.queries.getMessage(sourceMsgId);
+            if (!dbMsg) {
+              helpers.showToast("Source message not found", "error", 4000);
+              return;
+            }
+
+            if (dbMsg.media_type) {
+              helpers.showToast("Fetching media…", "info", 1500);
+              (async () => {
+                let path = dbMsg.media_path;
+                if (!path || !existsSync(path)) {
+                  try {
+                    path = await downloadAndCache(sock, dbMsg, props.queries);
+                  } catch (e) {
+                    helpers.showToast(`Forward failed: ${(e as Error)?.message ?? "download error"}`, "error", 4000);
+                    return;
+                  }
+                }
+                if (!path || !existsSync(path)) {
+                  helpers.showToast("Forward failed: media unavailable (too old or expired)", "error", 5000);
+                  return;
+                }
+                // Await sendMedia so a download/upload error doesn't race
+                // a misleading success toast onto the screen. sendMedia
+                // owns its own per-failure toast.
+                const caption = dbMsg.text ?? undefined;
+                await sendMedia(sock, targetJid, path, caption);
+                helpers.showToast(`Forwarded to ${targetName}`, "info", 2500);
+              })();
+              return;
+            }
+
+            // Text-only fallback: synthesize a minimal WAMessage and use
+            // baileys' forward handler.
+            const sourceJid = dbMsg.chat_jid;
+            const synth: any = {
+              key: {
+                remoteJid: sourceJid,
+                id: sourceMsgId,
+                fromMe: dbMsg.from_me === 1,
+                participant: sourceJid.endsWith("@g.us")
+                  ? (dbMsg.sender_jid ?? undefined)
+                  : undefined,
+              },
+              message: { conversation: dbMsg.text ?? "" },
+              messageTimestamp: dbMsg.timestamp,
+            };
+            sock
+              .sendMessage(targetJid, { forward: synth })
+              .then(() => helpers.showToast(`Forwarded to ${targetName}`, "info", 2500))
+              .catch((e) =>
+                helpers.showToast(`Forward failed: ${(e as Error)?.message ?? "unknown"}`, "error", 4000),
+              );
+          }}
+        />
+      </Show>
+      <Show when={store.overlay?.type === "info" && store.overlay?.infoChatJid}>
+        <InfoOverlay
+          queries={props.queries}
+          getSock={props.getSock}
+          chatJid={store.overlay!.infoChatJid!}
         />
       </Show>
     </box>

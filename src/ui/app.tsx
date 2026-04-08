@@ -10,9 +10,10 @@ import { downloadAndCache, isDownloadable } from "../wa/media.ts";
 import { log } from "../utils/log.ts";
 import { execSync } from "child_process";
 import { writeFileSync, readFileSync, unlinkSync } from "fs";
+import { resolveMentionDisplay, truncate } from "../utils/text.ts";
 import type { StoreQueries } from "../store/queries.ts";
 import type { WASocket } from "@whiskeysockets/baileys";
-import type { InputMethods } from "./types.ts";
+import type { InputMethods, ConfirmOption } from "./types.ts";
 
 export function App(props: {
   queries: StoreQueries;
@@ -323,6 +324,28 @@ export function App(props: {
         sock.presenceSubscribe(jid).catch(() => {});
       }
 
+      // For groups: backfill the local participants table from baileys'
+      // groupMetadata if our DB is empty for this group. Without this the
+      // mention picker (`@` in groups) shows nothing because it reads from
+      // the DB, and the info overlay also reports 0 members.
+      if (jid.endsWith("@g.us")) {
+        const existing = props.queries.getGroupParticipants(jid);
+        if (existing.length === 0) {
+          sock.groupMetadata(jid).then((meta: any) => {
+            if (meta?.participants?.length) {
+              const rows = meta.participants
+                .map((p: any) => ({
+                  group_jid: jid,
+                  user_jid: typeof p === "string" ? p : (p?.id ?? ""),
+                  role: typeof p === "object" ? (p?.admin ?? null) : null,
+                }))
+                .filter((r: any) => r.user_jid);
+              try { props.queries.upsertGroupParticipants(jid, rows); } catch {}
+            }
+          }).catch(() => {});
+        }
+      }
+
       // Encode inline images for this chat
       encodingStarted.clear();
       helpers.clearEncodedImages();
@@ -423,6 +446,9 @@ export function App(props: {
         const b64 = Buffer.from(msg.text).toString("base64");
         const osc = `\x1b]52;c;${b64}\x07`;
         kittyWrite(osc);
+        helpers.showToast("Copied to clipboard", "info", 2000);
+      } else {
+        helpers.showToast("Nothing to copy", "info", 2000);
       }
     },
 
@@ -436,6 +462,10 @@ export function App(props: {
         helpers.setReplyTo(msg.id);
         helpers.setMode("insert");
         helpers.setFocusZone("input");
+        const preview = msg.text
+          ? truncate(resolveMentionDisplay(msg.text, props.queries), 30)
+          : "[media]";
+        helpers.showToast(`Replying: ${preview}`, "info", 2000);
       }
     },
 
@@ -463,6 +493,111 @@ export function App(props: {
       setTimeout(() => {
         try { inputMethods?.setText((inputMethods?.getText() ?? "") + "@"); } catch {}
       }, 50);
+    },
+
+    onDeleteMessage() {
+      const jid = store.selectedChatJid;
+      if (!jid) return;
+      const msgs = store.messages[jid];
+      if (!msgs || msgs.length === 0) return;
+      const msg = msgs[store.selectedMessageIndex];
+      if (!msg) return;
+      // Build options: always offer "for me", offer "for everyone" only when
+      // the message is ours and within WhatsApp's 2-hour delete window.
+      const nowSec = Math.floor(Date.now() / 1000);
+      const withinWindow = nowSec - msg.timestamp < 2 * 60 * 60;
+      const options: ConfirmOption[] = [
+        { label: "Delete for me", value: "delete-me", danger: true },
+        ...(msg.from_me === 1 && withinWindow
+          ? [{ label: "Delete for everyone", value: "delete-everyone", danger: true } as ConfirmOption]
+          : []),
+        { label: "Cancel", value: "cancel" },
+      ];
+      const preview = msg.text
+        ? truncate(resolveMentionDisplay(msg.text, props.queries), 40)
+        : "[media]";
+      helpers.setOverlay({
+        type: "confirm",
+        confirm: {
+          title: "Delete message",
+          message: preview,
+          options,
+          intent: "delete-message",
+          data: { msgId: msg.id, jid },
+        },
+      });
+      helpers.setMode("search"); // borrows search mode so the modal's input gets keys
+    },
+
+    onSaveMedia() {
+      const jid = store.selectedChatJid;
+      if (!jid) return;
+      const msgs = store.messages[jid];
+      if (!msgs || msgs.length === 0) return;
+      const msg = msgs[store.selectedMessageIndex];
+      if (!msg) return;
+      const mt = msg.media_type ?? msg.type;
+      const isMedia = mt === "imageMessage" || mt === "videoMessage" ||
+                      mt === "audioMessage" || mt === "documentMessage" ||
+                      mt === "stickerMessage";
+      if (!isMedia) {
+        helpers.showToast("Not a media message", "info", 2000);
+        return;
+      }
+      const filename = msg.file_name ?? `${msg.id}`;
+      helpers.setOverlay({
+        type: "confirm",
+        confirm: {
+          title: "Save media",
+          message: `Save ${filename} to ~/Downloads/wa-tui/?`,
+          options: [
+            { label: "Save", value: "save" },
+            { label: "Cancel", value: "cancel" },
+          ],
+          intent: "save-media",
+          data: { msgId: msg.id },
+        },
+      });
+      helpers.setMode("search");
+    },
+
+    onReactMessage() {
+      const jid = store.selectedChatJid;
+      if (!jid) return;
+      const msgs = store.messages[jid];
+      if (!msgs || msgs.length === 0) return;
+      const msg = msgs[store.selectedMessageIndex];
+      if (!msg) return;
+      helpers.setOverlay({
+        type: "emoji-picker",
+        emojiPickIntent: "react",
+        emojiTargetMsgId: msg.id,
+      });
+      helpers.setMode("search");
+    },
+
+    onForwardMessage() {
+      const jid = store.selectedChatJid;
+      if (!jid) return;
+      const msgs = store.messages[jid];
+      if (!msgs || msgs.length === 0) return;
+      const msg = msgs[store.selectedMessageIndex];
+      if (!msg) return;
+      helpers.setOverlay({
+        type: "forward",
+        forwardSourceMsgId: msg.id,
+      });
+      helpers.setMode("search");
+    },
+
+    onShowChatInfo() {
+      const jid = store.selectedChatJid;
+      if (!jid) return;
+      helpers.setOverlay({
+        type: "info",
+        infoChatJid: jid,
+      });
+      helpers.setMode("search");
     },
 
   });

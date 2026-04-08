@@ -1,9 +1,10 @@
-import { Show, createMemo } from "solid-js";
+import { Show, createMemo, type Accessor } from "solid-js";
 import { useTheme, type Theme } from "../theme.tsx";
 import { useAppStore } from "../state.tsx";
 import { IMAGE_MEDIA_TYPES } from "../image.ts";
 import type { MessageRow } from "../../store/queries.ts";
 import { mediaLabel as mediaTypeLabel } from "../../wa/message-types.ts";
+import type { EncodedImageData } from "../types.ts";
 
 function senderColorFromName(name: string, colors: string[]): string {
   let hash = 0;
@@ -52,6 +53,10 @@ function formatDateSeparator(ts: number): string {
 
 export interface BubbleProps {
   message: MessageRow;
+  /** Pre-resolved message text (mentions replaced with contact names). If
+   *  null, fall back to message.text. Resolved upstream in messages.tsx so
+   *  we don't have to plumb queries through to every bubble. */
+  resolvedText?: string | null;
   showSender: boolean;
   showDate: boolean;
   senderName: string;
@@ -75,7 +80,9 @@ export function MessageBubble(props: BubbleProps) {
   };
 
   const msgContent = () => {
-    const text = props.message.text;
+    // Prefer the upstream-resolved text (mentions replaced with names),
+    // falling back to the raw message text if resolution didn't happen.
+    const text = props.resolvedText ?? props.message.text;
     const mediaType = props.message.media_type;
 
     // For images and stickers, the inline image renders separately (via the
@@ -167,7 +174,7 @@ export function MessageBubble(props: BubbleProps) {
           </Show>
           {/* Inline image (Kitty virtual placement) */}
           <Show when={imageData()}>
-            {(img) => (
+            {(img: Accessor<EncodedImageData>) => (
               <box height={img().rows} width={img().cols}>
                 <text fg={img().fgHex}>{img().placeholders}</text>
               </box>
@@ -179,13 +186,17 @@ export function MessageBubble(props: BubbleProps) {
               <text fg={theme.text}>{contentText()}</text>
             </box>
           </Show>
-          {/* Caption below image */}
-          <Show when={imageData() && props.message.text}>
+          {/* Caption below image — use the upstream-resolved text so any
+              `@<digits>` mentions get rendered as `@<contact name>`. */}
+          <Show when={imageData() && (props.resolvedText ?? props.message.text)}>
             <box height={1}>
-              <text fg={theme.text}>{props.message.text!}</text>
+              <text fg={theme.text}>{(props.resolvedText ?? props.message.text)!}</text>
             </box>
           </Show>
           <box height={1} flexDirection="row" justifyContent="flex-end" gap={1}>
+            <Show when={props.message.react_emoji}>
+              <text fg={theme.borderAccent}>{props.message.react_emoji!}</text>
+            </Show>
             <text fg={theme.textMuted}>{formatTime(props.message.timestamp)}</text>
             <Show when={isOwn()}>
               {(() => { const r = receiptStyle(props.message.status, theme); return <text fg={r.color}>{r.glyph}</text>; })()}

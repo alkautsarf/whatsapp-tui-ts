@@ -21,6 +21,11 @@ export function useAppKeyboard(actions: {
   onOpenImage?: () => void;
   onOpenEditor?: () => void;
   onTypeAt?: () => void;
+  onDeleteMessage?: () => void;
+  onSaveMedia?: () => void;
+  onReactMessage?: () => void;
+  onForwardMessage?: () => void;
+  onShowChatInfo?: () => void;
 }) {
   const { store, helpers } = useAppStore();
 
@@ -46,6 +51,14 @@ export function useAppKeyboard(actions: {
 
   function drillBack() {
     if (store.mode === "insert") {
+      // First Esc with an active reply: clear the reply, stay in insert.
+      // Lets the user cancel a reply without sending a junk message.
+      // Second Esc (or Esc with no reply) leaves insert mode normally.
+      if (store.replyToMessageId) {
+        helpers.setReplyTo(null);
+        helpers.showToast("Reply cleared", "info", 1500);
+        return;
+      }
       helpers.setMode("normal");
       return;
     }
@@ -106,8 +119,12 @@ export function useAppKeyboard(actions: {
     // ── Normal mode ──────────────────────────────────────────────
     evt.preventDefault();
 
-    // Command palette
+    // Command palette. Switch to "search" mode so the global key handler
+    // passes keys through to the palette's focused input — without this,
+    // the global Down/Up handlers eat the navigation keys (and typing
+    // doesn't reach the input either).
     if (evt.ctrl && evt.name === "p") {
+      helpers.setMode("search");
       helpers.setOverlay({ type: "command-palette" });
       return;
     }
@@ -204,6 +221,15 @@ export function useAppKeyboard(actions: {
       return;
     }
 
+    // Chat info — `gi` chord. MUST come before the `i` insert handler
+    // below or `i` would always switch to insert mode first and the chord
+    // would never fire.
+    if (evt.name === "i" && !evt.ctrl && !evt.meta && keyBuffer === "g") {
+      clearKeyBuffer();
+      actions.onShowChatInfo?.();
+      return;
+    }
+
     // Insert mode
     if (evt.name === "i" && !evt.ctrl && !evt.meta) {
       helpers.setMode("insert");
@@ -294,5 +320,40 @@ export function useAppKeyboard(actions: {
       }
       return;
     }
+
+    // Delete message (`d` in messages zone) — opens confirm modal
+    if (evt.name === "d" && !evt.ctrl && !evt.meta) {
+      if (store.focusZone === "messages") {
+        actions.onDeleteMessage?.();
+      }
+      return;
+    }
+
+    // Save media (`s` in messages zone) — opens confirm modal
+    if (evt.name === "s" && !evt.ctrl && !evt.meta && !evt.shift) {
+      if (store.focusZone === "messages") {
+        actions.onSaveMedia?.();
+      }
+      return;
+    }
+
+    // React to message (`e` in messages zone) — opens emoji picker in
+    // react mode (sends the picked emoji as a reaction instead of inserting
+    // into the input box).
+    if (evt.name === "e" && !evt.ctrl && !evt.meta) {
+      if (store.focusZone === "messages") {
+        actions.onReactMessage?.();
+      }
+      return;
+    }
+
+    // Forward message (`f` in messages zone) — opens target picker
+    if (evt.name === "f" && !evt.ctrl && !evt.meta) {
+      if (store.focusZone === "messages") {
+        actions.onForwardMessage?.();
+      }
+      return;
+    }
+
   });
 }
