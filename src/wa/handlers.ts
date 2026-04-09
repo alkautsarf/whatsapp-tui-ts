@@ -60,7 +60,11 @@ function convertMessage(msg: WAMessage): MessageRow | null {
   if (!msg?.key?.id || !msg.key.remoteJid) return null;
 
   const contentType = msg.message ? getContentType(msg.message) : null;
-  const content = contentType ? (msg.message as any)?.[contentType] : null;
+  // No identifiable content type → can't display (e.g. encrypted messages for
+  // groups we've left where we no longer have the sender key). Skip entirely
+  // to prevent ghost group rows from being created/bumped via upsertChat.
+  if (!contentType) return null;
+  const content = (msg.message as any)?.[contentType] ?? null;
   const text =
     content?.text ??
     content?.caption ??

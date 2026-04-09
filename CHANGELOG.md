@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.1] - 2026-04-09
+
+### Fixed
+
+- Drop messages with unidentifiable content type (`contentType === null`) in `convertMessage` — prevents ghost group rows from being created or bumped to the top of the chat list when baileys delivers undecryptable messages for groups the user has left
+
 ## [0.5.0] - 2026-04-08
 
 ### Added
@@ -389,6 +395,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
 [0.5.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.0
+[0.5.1]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.1
 [0.4.4]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.4
 [0.4.3]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.3
 [0.4.2]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.2
