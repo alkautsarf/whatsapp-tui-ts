@@ -21,13 +21,8 @@ mkdir -p "${DIST}/bin" "${DIST}/src"
 cp -r src/ "${DIST}/src/"
 cp package.json bun.lock tsconfig.json bunfig.toml ws-override.ts README.md "${DIST}/"
 
-# Wrapper script — cd to SCRIPT_DIR so bun finds tsconfig.json/bunfig.toml
-cat > "${DIST}/bin/wa" << 'WRAPPER'
-#!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-cd "${SCRIPT_DIR}"
-exec bun run src/index.tsx "$@"
-WRAPPER
+# Copy the repo's bin/wa (has the exit-42 restart loop)
+cp bin/wa "${DIST}/bin/wa"
 chmod +x "${DIST}/bin/wa"
 
 ln -sf "wa" "${DIST}/bin/watui"
