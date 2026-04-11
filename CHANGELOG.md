@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.3] - 2026-04-11
+
+### Fixed
+
+- **Double image encoding on every chat switch**. Root cause: `onSelectChat` in `src/ui/app.tsx` called `encodeImagesForChat(chatMsgs)` directly AFTER `helpers.selectChat(jid)`, while the `createEffect` watching `store.selectedChatJid` + `store.messages[jid]` ALSO fired (from `selectChat`'s setStore) and called `encodeImagesForChat` with the same list. Because `encodingStarted.clear()` ran between the effect's claim and the direct call, both passes saw an empty claim set and both ran to completion — visible as doubled `"Encoded N images (instant)"` log lines, doubled `"Downloading N in background"` lines, and doubled per-message download-failure warnings. Every chat switch did 2x the encode work and 2x the media downloads. Fix: (1) move dedup inside `encodeImagesForChat` with a combined filter (image-type + `!encodingStarted.has`) + synchronous claim before the first `await` so concurrent callers bail at the filter, (2) move the three clear calls (`encodingStarted.clear` / `helpers.clearEncodedImages` / `clearAllImages`) to BEFORE `helpers.selectChat` so the effect sees a fresh set, (3) remove the trailing direct call in `onSelectChat`. The effect is now the single encode path. Verified end-to-end in a tmux dev instance: chris 2, testing, and a 29-image chat each log exactly once; rapid chat switching produces no duplicates.
+
 ## [0.5.2] - 2026-04-11
 
 ### Fixed
@@ -400,6 +406,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.5.3]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.3
 [0.5.2]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.2
 [0.5.1]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.1
 [0.5.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.0

@@ -37,26 +37,30 @@ export function App(props: {
 
   let inputMethods: InputMethods | null = null;
 
-  // Watch for new image messages in the currently viewed chat
+  // Watch for new image messages in the currently viewed chat. Dedup lives
+  // inside encodeImagesForChat so this effect and the resume-path callers
+  // (full-view exit, editor resume, PDF viewer resume) can't race each
+  // other into double-encoding the same messages.
   createEffect(() => {
     const jid = store.selectedChatJid;
     if (!jid) return;
     const msgs = store.messages[jid];
     if (!msgs) return;
-    const imageMsgs = msgs.filter(m => IMAGE_MEDIA_TYPES.has(m.media_type ?? m.type));
-    // Filter using the local Set, NOT the reactive store (breaks the loop)
-    const unencoded = imageMsgs.filter(m => !encodingStarted.has(m.id));
-    if (unencoded.length > 0) {
-      for (const m of unencoded) encodingStarted.add(m.id);
-      log("image", `Chat ${jid.slice(0,12)}...: ${unencoded.length} new images to encode`);
-      encodeImagesForChat(unencoded);
-    }
+    encodeImagesForChat(msgs);
   });
 
   // Encode images for a chat — thumbnails first (instant), downloads in background
   async function encodeImagesForChat(msgs: import("../store/queries.ts").MessageRow[]) {
-    msgs = msgs.filter(m => IMAGE_MEDIA_TYPES.has(m.media_type ?? m.type));
+    // Filter to image types + dedup against encodingStarted, then claim the
+    // IDs synchronously (before any await) so concurrent callers bail at the
+    // filter instead of racing to encode the same messages.
+    msgs = msgs.filter(m =>
+      IMAGE_MEDIA_TYPES.has(m.media_type ?? m.type) &&
+      !encodingStarted.has(m.id)
+    );
     if (msgs.length === 0) return;
+    for (const m of msgs) encodingStarted.add(m.id);
+    log("image", `Chat ${store.selectedChatJid?.slice(0,12)}...: ${msgs.length} new images to encode`);
     const fs = await import("fs");
     const sock = props.getSock();
 
@@ -302,6 +306,14 @@ export function App(props: {
     onSelectChat() {
       const jid = store.highlightedChatJid;
       if (!jid) return;
+      // Clear encode state BEFORE selectChat so the createEffect fired by
+      // selectChat's setStore sees a fresh encodingStarted and runs a
+      // single encode pass (no race with a direct call).
+      if (store.selectedChatJid !== jid) {
+        encodingStarted.clear();
+        helpers.clearEncodedImages();
+        clearAllImages();
+      }
       helpers.selectChat(jid);
       const sock = props.getSock();
       if (!sock) return;
@@ -346,14 +358,6 @@ export function App(props: {
         }
       }
 
-      // Encode inline images for this chat
-      encodingStarted.clear();
-      helpers.clearEncodedImages();
-      clearAllImages();
-      const chatMsgs = store.messages[jid];
-      if (chatMsgs) {
-        encodeImagesForChat(chatMsgs);
-      }
     },
 
     onNavigateChatList(dir) {
