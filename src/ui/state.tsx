@@ -2,6 +2,7 @@ import { createContext, useContext } from "solid-js";
 import { createStore, type SetStoreFunction } from "solid-js/store";
 import type { StoreQueries, ChatRow, MessageRow, ContactRow } from "../store/queries.ts";
 import { log } from "../utils/log.ts";
+import { isTerminalFocused } from "../utils/terminal-focus.ts";
 import type {
   AppStore,
   AppMode,
@@ -183,12 +184,19 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
           log("bridge", `onNewMessage: ${chatJid} | viewing: ${store.selectedChatJid} | text: ${msg.text?.slice(0, 40)}`);
           const viewing = store.selectedChatJid;
           const isViewingThisChat = viewing === chatJid;
+          // "Actually reading" requires the pane to be focused too — matches
+          // the read-receipt gate in wa/handlers.ts. Without the focus
+          // check, a new message arriving in a selected-but-unfocused chat
+          // would silently clear the unread badge locally while the server
+          // still has it unread (we no longer send a read receipt), and
+          // the user would return to wa-tui and miss the new-message cue.
+          const isActivelyViewing = isViewingThisChat && isTerminalFocused();
           if (isViewingThisChat) {
             const msgs = queries.getMessages(viewing, 100);
             setStore("messages", viewing, msgs);
           }
           const chatIdx = store.chats.findIndex(c => c.jid === chatJid);
-          const shouldBumpUnread = !msg.from_me && !isViewingThisChat;
+          const shouldBumpUnread = !msg.from_me && !isActivelyViewing;
           if (chatIdx >= 0) {
             setStore("chats", chatIdx, "last_msg_ts", msg.timestamp);
             // Always update both fields so a sticker/media arriving after
@@ -198,9 +206,9 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
             if (shouldBumpUnread) {
               setStore("chats", chatIdx, "unread", (u) => (u ?? 0) + 1);
               queries.incrementUnread(chatJid);
-            } else if (isViewingThisChat && (store.chats[chatIdx]?.unread ?? 0) > 0) {
+            } else if (isActivelyViewing && (store.chats[chatIdx]?.unread ?? 0) > 0) {
               // Belt-and-suspenders: a stale increment shouldn't survive
-              // while the user is staring at the chat.
+              // while the user is actually looking at the chat.
               setStore("chats", chatIdx, "unread", 0);
               queries.clearUnread(chatJid);
             }

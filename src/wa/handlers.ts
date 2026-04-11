@@ -258,7 +258,16 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
         });
         bridge?.onNewMessage(row, chatJid);
 
-        if (row.from_me === 0 && viewingJid === chatJid) {
+        // Computed once for this message and reused by the read-receipt
+        // gate below and the notification gate further down — they both
+        // need the same "user is truly reading this chat right now" check.
+        const userActivelyViewing =
+          viewingJid === chatJid && isTerminalFocused();
+
+        // Focus-gate read receipts: WhatsApp treats readMessages as
+        // concrete active-device evidence that overrides presence=unavailable
+        // and keeps push routing here instead of the phone.
+        if (row.from_me === 0 && userActivelyViewing) {
           readKeys.push({
             remoteJid: chatJid,
             id: row.id,
@@ -271,16 +280,13 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
         // System notification gate — fires only when ALL conditions hold:
         //   1. type === "notify"            (real new message, not history sync)
         //   2. !from_me                     (not sent by us)
-        //   3. NOT (chat is selected AND wa-tui terminal is focused)
-        //                                   (suppress only when user is actually
-        //                                    looking at the chat — a chat being
-        //                                    selected in a background tmux session
-        //                                    should still notify)
+        //   3. !userActivelyViewing         (suppress only when the user is
+        //                                    actually reading the chat — a chat
+        //                                    selected in a background tmux
+        //                                    session should still notify)
         //   4. chat is not status@broadcast (status updates are noise)
         //   5. chat is not muted on WA      (respect user's mute preference)
         //   6. per-chat rate limit (3s)     (handled inside notify())
-        const userActivelyViewing =
-          viewingJid === chatJid && isTerminalFocused();
         if (
           allowNotifications &&
           row.from_me === 0 &&

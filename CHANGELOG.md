@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.4] - 2026-04-11
+
+### Fixed
+
+- **Phone push notifications still suppressed even after the v0.5.2 presence fix** — root cause was read receipts, not presence. When a message arrived in the currently-selected chat, `handlers.ts messages.upsert` unconditionally called `sock.readMessages(...)` to mark it read on the server, regardless of whether the terminal pane was actually focused. WhatsApp's server treats `readMessages` as a **concrete active-device signal** that overrides the soft `sendPresenceUpdate('unavailable')` we send on focus-out — so the server kept routing push notifications to wa-tui and the phone stayed silent. Proven by adding an `isOnline` listener and `notify-gate` instrumentation: `'unavailable'` was sent correctly every time, but the read-receipt leak contradicted it. Fix gates the auto read-receipt on `isTerminalFocused()` via a hoisted `userActivelyViewing = viewingJid === chatJid && isTerminalFocused()` that both the read-receipt gate and the existing notification gate now share. Same focus guard extended to `state.tsx onNewMessage` so the local unread-counter (`shouldBumpUnread` + the `clearUnread` belt-and-suspenders branch) matches the server's read state — when a message arrives in a selected-but-unfocused chat, the unread badge now correctly bumps instead of silently clearing. Verified end-to-end: switch to wa-tui → open chris 2 → switch back to main → have chris send → phone rings AND Mac banner fires simultaneously.
+
 ## [0.5.3] - 2026-04-11
 
 ### Fixed
@@ -406,6 +412,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.5.4]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.4
 [0.5.3]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.3
 [0.5.2]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.2
 [0.5.1]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.1
