@@ -89,6 +89,11 @@ function initClientCore(options: ClientOptions): {
         browser: Browsers.macOS("Desktop"),
         generateHighQualityLinkPreview: false,
         syncFullHistory: true,
+        // Don't auto-broadcast 'available' on every connect. WhatsApp's server
+        // suppresses phone push notifications whenever any linked device is
+        // online, so we take explicit ownership of presence and flip it based
+        // on terminal focus (see src/index.tsx focus→presence bridge).
+        markOnlineOnConnect: false,
         getMessage: options.getMessage ?? (async () => undefined),
       });
 

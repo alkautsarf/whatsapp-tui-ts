@@ -6,7 +6,12 @@ import { createInterface } from "readline";
 import { existsSync } from "fs";
 import { log, ok, warn, err } from "./utils/log.ts";
 import { AUTH_DIR, LOG_PATH } from "./utils/paths.ts";
-import { installFocusTracking, uninstallFocusTracking } from "./utils/terminal-focus.ts";
+import {
+  installFocusTracking,
+  uninstallFocusTracking,
+  subscribeFocusChange,
+  isTerminalFocused,
+} from "./utils/terminal-focus.ts";
 import { acquireLock, releaseLock, InstanceLockError } from "./utils/instance-lock.ts";
 import type { WASocket } from "@whiskeysockets/baileys";
 
@@ -314,6 +319,8 @@ async function runTui() {
       registerHandlers(sock, queries, bridge);
       helpers.setConnection({ status: "connected" });
       helpers.hydrate();
+      // Reconnects build a fresh socket; re-apply focus-based presence.
+      publishPresence();
     },
     onReconnecting: (attempt) =>
       helpers.setConnection({ status: "reconnecting", reconnectAttempt: attempt }),
@@ -338,13 +345,56 @@ async function runTui() {
   // doesn't fight stdin raw-mode initialization.
   installFocusTracking();
 
-  function quit() {
+  // Bridge terminal focus → Baileys presence so the phone resumes getting
+  // push notifications when wa-tui is backgrounded. WhatsApp's server
+  // suppresses push whenever any linked device is "available". Focus-in
+  // fires 'available' immediately; focus-out debounces 1500ms so quick
+  // tmux pane-hops don't flicker contacts' "online" dot.
+  let pendingUnavailable: ReturnType<typeof setTimeout> | null = null;
+  const FOCUS_OUT_DEBOUNCE_MS = 1500;
+
+  function publishPresence() {
+    if (pendingUnavailable) {
+      clearTimeout(pendingUnavailable);
+      pendingUnavailable = null;
+    }
+    const sock = currentSock;
+    if (!sock) return; // no socket yet; onConnected will re-apply on open
+    if (isTerminalFocused()) {
+      sock.sendPresenceUpdate("available").catch(() => {});
+    } else {
+      pendingUnavailable = setTimeout(() => {
+        pendingUnavailable = null;
+        currentSock?.sendPresenceUpdate("unavailable").catch(() => {});
+      }, FOCUS_OUT_DEBOUNCE_MS);
+    }
+  }
+
+  const unsubscribeFocus = subscribeFocusChange(publishPresence);
+
+  async function quit() {
+    unsubscribeFocus();
+    if (pendingUnavailable) {
+      clearTimeout(pendingUnavailable);
+      pendingUnavailable = null;
+    }
     uninstallFocusTracking();
     releaseLock();
     // Destroy renderer first to restore terminal state
     try { renderer.destroy(); } catch {}
     // Restore terminal fully — clear alt screen + any image artifacts
     process.stdout.write("\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[0m\x1b[2J\x1b[H");
+    // Flush 'unavailable' BEFORE sock.end — sock.end closes the websocket
+    // synchronously without waiting for pending frames, so without this the
+    // server keeps us "online" for its idle timeout (~60s) and phone
+    // notifications stay suppressed for that window after clean quit.
+    // 500ms cap so a half-open socket never stalls shutdown.
+    try {
+      await Promise.race([
+        currentSock?.sendPresenceUpdate("unavailable"),
+        new Promise((r) => setTimeout(r, 500)),
+      ]);
+    } catch {}
     try { client.sock?.end?.(undefined); } catch {}
     closeDb(db);
     process.exit(0);

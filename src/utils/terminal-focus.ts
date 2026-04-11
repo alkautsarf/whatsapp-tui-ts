@@ -39,8 +39,28 @@ const FOCUS_OUT = Buffer.from([0x1b, 0x5b, 0x4f]); // ESC [ O
 let focused = false;
 let installed = false;
 
+type FocusListener = (focused: boolean) => void;
+const listeners = new Set<FocusListener>();
+
 export function isTerminalFocused(): boolean {
   return focused;
+}
+
+function setFocused(next: boolean): void {
+  if (focused === next) return;
+  focused = next;
+  for (const cb of listeners) {
+    try { cb(next); } catch {}
+  }
+}
+
+// Subscribe to focus changes. The callback fires with the current state on
+// subscribe (via queueMicrotask), then on every subsequent focus flip.
+// Returns an unsubscribe function.
+export function subscribeFocusChange(cb: FocusListener): () => void {
+  listeners.add(cb);
+  queueMicrotask(() => cb(focused));
+  return () => { listeners.delete(cb); };
 }
 
 export function installFocusTracking(): void {
@@ -55,8 +75,8 @@ export function installFocusTracking(): void {
   // listener does NOT swallow the bytes — they continue to whatever else
   // is reading stdin (which ignores them as no-op CSI).
   process.stdin.on("data", (chunk: Buffer) => {
-    if (chunk.includes(FOCUS_IN)) focused = true;
-    if (chunk.includes(FOCUS_OUT)) focused = false;
+    if (chunk.includes(FOCUS_IN)) setFocused(true);
+    if (chunk.includes(FOCUS_OUT)) setFocused(false);
   });
 }
 

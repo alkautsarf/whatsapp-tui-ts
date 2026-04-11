@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.2] - 2026-04-11
+
+### Fixed
+
+- **Phone push notifications suppressed while wa-tui is running**. Root cause: baileys was called without `markOnlineOnConnect` override, defaulting to `true`, so every reconnect Baileys broadcast `sendPresenceUpdate('available')` and WhatsApp's server stopped routing push to the phone whenever a linked device appeared online. Fix wires the existing terminal-focus tracker (`src/utils/terminal-focus.ts`, DEC 1004) to Baileys presence: `markOnlineOnConnect: false` in the socket config, a new `subscribeFocusChange(cb)` pub-sub in `terminal-focus.ts`, and a `publishPresence()` bridge in `runTui()` that fires `sendPresenceUpdate('available')` immediately on focus-in and `sendPresenceUpdate('unavailable')` after a 1500ms debounce on focus-out (so quick tmux pane-hops don't flicker contacts' "online" dot). `onConnected` re-applies the current focus state on every (re)connect. `quit()` became async and flushes `sendPresenceUpdate('unavailable')` with a 500ms `Promise.race` timeout before `sock.end` — sock.end closes the websocket synchronously without draining pending frames, so without the flush the server would hold us "online" for its ~60s idle timeout and phone pushes would stay suppressed for that window after clean quit. Net behavior now matches WhatsApp Desktop: phone silent while the pane is focused, phone takes over the instant focus leaves, both surfaces alert when backgrounded.
+
 ## [0.5.1] - 2026-04-09
 
 ### Fixed
@@ -394,8 +400,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
-[0.5.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.0
+[0.5.2]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.2
 [0.5.1]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.1
+[0.5.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.0
 [0.4.4]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.4
 [0.4.3]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.3
 [0.4.2]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.4.2
