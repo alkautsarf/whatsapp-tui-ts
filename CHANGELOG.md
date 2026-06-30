@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.5] - 2026-06-30
+
+### Fixed
+
+- **7-hour WhatsApp 428 disconnect storm**. A transient WhatsApp server wobble (a 503 cluster) flipped to a persistent `428 connectionClosed`, and the reconnect loop in `src/wa/client.ts` had no backoff ceiling: it retried on a fixed `2/4/6/8/10s`-then-immediate-restart cycle (~34s drumbeat, ~3,600 attempts over 7h), which kept feeding WhatsApp's connection-rate anti-abuse and held the account in a self-sustaining penalty box. The session itself stayed valid the whole time (no 401/440/403, device never dropped from Linked Devices), so re-linking was never the answer. Empirically the throttle does NOT clear in 30-60 min and it flaps: it lets an occasional connect through, then slams rapid re-attempts with an instant 428. Fix: a new dependency-free reconnect policy in `src/wa/reconnect.ts` with (1) bounded exponential backoff + ±25% jitter + a 60s ceiling so attempts never form a steady drumbeat, (2) a circuit breaker that, after 6 throttle-family closes (428/503) without a stable connection, switches to escalating penalty-box cooldowns (15/30/45/60 min, capped) so we stop hammering and let the box clear, (3) stability gating: the breaker accounting only resets after a connection holds for >=30s, so a brief throttle flap that opens then drops cannot reset the loop back into a 2s hammer, and (4) tolerance for interleaved transient closes (a 408 in the middle of a 428 run no longer zeroes the breaker count). The reconnect close path now also logs the Baileys Boom message string (`Connection Terminated` local ws-close vs `Connection Terminated by Server` stream-end) to distinguish a server-driven close from a local one. Worst-case reconnect volume over a multi-hour outage drops from thousands of attempts to roughly a dozen. Policy is covered by unit tests in `src/wa/client.reconnect.test.ts`.
+
 ## [0.5.4] - 2026-04-11
 
 ### Fixed
@@ -412,6 +418,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.5.5]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.5
 [0.5.4]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.4
 [0.5.3]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.3
 [0.5.2]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.2

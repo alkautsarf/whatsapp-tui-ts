@@ -14,6 +14,12 @@ import qrcode from "qrcode-terminal";
 import { existsSync } from "fs";
 import { log, ok, warn, err } from "../utils/log.ts";
 import { AUTH_DIR } from "../utils/paths.ts";
+import {
+  computeReconnect,
+  RECONNECT_INITIAL,
+  STABLE_OPEN_MS,
+  type ReconnectState,
+} from "./reconnect.ts";
 
 export interface WaClient {
   sock: WASocket;
@@ -47,7 +53,7 @@ function initClientCore(options: ClientOptions): {
   const logLevel = options.logLevel ?? "silent";
 
   const hasSession = existsSync(`${authDir}/creds.json`);
-  log("wa", hasSession ? "Session found — resuming" : "No session — QR auth required");
+  log("wa", hasSession ? "Session found, resuming" : "No session, QR auth required");
 
   let sock: WASocket;
   let resolveConnected: (() => void) | null = null;
@@ -76,7 +82,7 @@ function initClientCore(options: ClientOptions): {
     const logger = pino({ level: logLevel }) as any;
     let version = await fetchVersion();
 
-    let reconnectAttempt = 0;
+    let reconnectState: ReconnectState = { ...RECONNECT_INITIAL };
 
     async function connect() {
       sock = makeWASocket({
@@ -103,6 +109,7 @@ function initClientCore(options: ClientOptions): {
       // if nothing arrives for LIVENESS_TIMEOUT_MS.
       let lastEventAt = Date.now();
       let isOpen = false;
+      let openedAt: number | null = null; // when this socket reached 'open', for stability gating
       const bumpLiveness = () => { lastEventAt = Date.now(); };
 
       const ws = (sock as any).ws;
@@ -114,7 +121,7 @@ function initClientCore(options: ClientOptions): {
         if (!isOpen) return;
         const silentMs = Date.now() - lastEventAt;
         if (silentMs > LIVENESS_TIMEOUT_MS) {
-          warn("wa", `Socket silent for ${Math.round(silentMs / 1000)}s — forcing reconnect`);
+          warn("wa", `Socket silent for ${Math.round(silentMs / 1000)}s, forcing reconnect`);
           clearInterval(healthCheckInterval);
           isOpen = false;
           try { sock.end(new Error("liveness timeout")); } catch {}
@@ -136,7 +143,12 @@ function initClientCore(options: ClientOptions): {
         if (connection === "close") {
           isOpen = false;
           clearInterval(healthCheckInterval);
-          const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+          const boom = lastDisconnect?.error as Boom | undefined;
+          const statusCode = boom?.output?.statusCode;
+          // Boom message discriminates a local ws.close ("Connection Terminated")
+          // from a server-driven stream end ("Connection Terminated by Server").
+          // Same numeric 428 either way, so log the string: it's the only signal.
+          const reason = boom?.message;
 
           if (statusCode === DisconnectReason.loggedOut) {
             err("wa", "Logged out. Delete auth_state/ and restart.");
@@ -148,23 +160,31 @@ function initClientCore(options: ClientOptions): {
             version = await fetchVersion();
           }
 
-          if (reconnectAttempt < 5) {
-            reconnectAttempt++;
-            const delay = Math.min(reconnectAttempt * 2000, 10000);
-            warn("wa", `Disconnected (${statusCode}), reconnecting in ${delay / 1000}s... (${reconnectAttempt}/5)`);
-            options.onReconnecting?.(reconnectAttempt);
-            await new Promise((r) => setTimeout(r, delay));
-            connect();
+          // Did this connection stay open long enough to count as healthy? If
+          // so the breaker accounting resets; a brief throttle flap does not.
+          const wasStable = openedAt !== null && Date.now() - openedAt >= STABLE_OPEN_MS;
+          openedAt = null;
+
+          const decision = computeReconnect(reconnectState, statusCode, wasStable);
+          reconnectState = decision.next;
+
+          if (decision.inPenaltyBox) {
+            warn(
+              "wa",
+              `428 penalty-box (run=${reconnectState.throttleRun}, cycle=${reconnectState.cooldownCycle}) [${reason ?? "?"}]: long cooldown ${Math.round(decision.delay / 60000)}m before retry`,
+            );
           } else {
-            // Reset and try one more cycle
-            reconnectAttempt = 0;
-            warn("wa", `Reconnect cycle exhausted, restarting connection...`);
-            options.onReconnecting?.(0);
-            await new Promise((r) => setTimeout(r, 5000));
-            connect();
+            warn(
+              "wa",
+              `Disconnected (${statusCode}${reason ? " " + reason : ""}), reconnecting in ${Math.round(decision.delay / 1000)}s (failure ${reconnectState.failures})`,
+            );
           }
+
+          options.onReconnecting?.(reconnectState.failures);
+          await new Promise((r) => setTimeout(r, decision.delay));
+          connect();
         } else if (connection === "open") {
-          reconnectAttempt = 0;
+          openedAt = Date.now();
           isOpen = true;
           bumpLiveness();
           ok("wa", "Connected to WhatsApp!");
