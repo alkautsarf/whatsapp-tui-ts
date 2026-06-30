@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.6] - 2026-06-30
+
+### Fixed
+
+- **Penalized account could never reconnect (the real fix for the 2026-06-30 outage)**. After the disconnect storm drove the account into WhatsApp's penalty state, every reconnect still got an instant `428` even once the rate-limit eased, so ~11.5h of waiting plus the v0.5.5 backoff never recovered it. Root cause, proven with two single-shot probes 80s apart: WhatsApp **rejects the heavy full-history-sync handshake with `428` while an account is penalized, but accepts a lightweight connect** (`syncFullHistory: false` connected and held; `syncFullHistory: true` got instant `428`). The app requested a full history sync on every reconnect, so it was rejected every time. Fix: `syncFullHistory: !state.creds.me` in `src/wa/client.ts`, gated on the parsed registration identity Baileys itself uses (read fresh on every connect). Only a genuine first link or a re-pair after lost/corrupt creds (`me` undefined) requests the full sync; an established session already has its history in the local DB and connects lightweight, and a session linked mid-process drops to lightweight as soon as `me` is populated so reconnects never re-trip the penalty. Reconnected in ~2s on apply. The v0.5.5 backoff + 428 circuit breaker remain the prevention layer (they stop the hammering that drives the account into the penalty box); this is the recovery layer that gets a penalized session back online.
+
 ## [0.5.5] - 2026-06-30
 
 ### Fixed
@@ -418,6 +424,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.5.6]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.6
 [0.5.5]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.5
 [0.5.4]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.4
 [0.5.3]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.3

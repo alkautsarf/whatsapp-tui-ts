@@ -94,7 +94,18 @@ function initClientCore(options: ClientOptions): {
         logger,
         browser: Browsers.macOS("Desktop"),
         generateHighQualityLinkPreview: false,
-        syncFullHistory: true,
+        // Only request a full history sync when there is no registered identity
+        // yet, i.e. a genuine first link (or a re-pair after creds were lost or
+        // corrupted). After the 2026-06-30 storm we confirmed (two probes 80s
+        // apart) that WhatsApp rejects the heavy full-history-sync handshake with
+        // 428 while an account is in its post-storm penalty state, yet accepts a
+        // lightweight connect. Gate on the PARSED creds (`creds.me`, the same
+        // signal Baileys uses to choose login vs register), read fresh on every
+        // connect(): an established session already has its history in the local
+        // DB and connects lightweight, a corrupt creds.json (me=undefined) still
+        // backfills on re-pair, and a session linked mid-process drops to
+        // lightweight as soon as `me` is populated (so reconnects don't re-trip).
+        syncFullHistory: !state.creds.me,
         // Don't auto-broadcast 'available' on every connect. WhatsApp's server
         // suppresses phone push notifications whenever any linked device is
         // online, so we take explicit ownership of presence and flip it based
