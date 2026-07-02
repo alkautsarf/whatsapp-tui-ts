@@ -2,13 +2,34 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${SCRIPT_DIR}"
 
-# Loop on exit code 42 — that's the "restart requested" sentinel the
-# in-app Ctrl+P → "Restart wa-tui" command exits with. Any other exit
-# (0, Ctrl+C, error) breaks the loop and returns control to the shell.
+# Loop on exit code 42: the "restart requested" sentinel the in-app
+# Ctrl+P -> "Restart wa-tui" command exits with. Any other exit (0, Ctrl+C,
+# error) breaks the loop and returns control to the shell.
+#
+# Restart-rate guard: every restart is a fresh WhatsApp login, and a
+# pathological exit-42 loop would hammer the server with logins (the exact
+# behavior that lands the account in the 428 penalty box). The guard keys on
+# the app's RUNTIME, not a wall-clock window: an app that ran under 10s
+# before exiting 42 is looping, one that ran minutes is a deliberate user
+# restart (always instant, resets the counter). Runtime is measured around
+# the app itself, so the pause can never re-arm the counter by mere passage
+# of time.
+rapid=0
 while true; do
+  app_start=$(date +%s)
   bun run src/index.tsx "$@"
   code=$?
   if [ "$code" -ne 42 ]; then
     exit "$code"
+  fi
+  runtime=$(( $(date +%s) - app_start ))
+  if [ "$runtime" -lt 10 ]; then
+    rapid=$((rapid + 1))
+  else
+    rapid=0
+  fi
+  if [ "$rapid" -gt 5 ]; then
+    echo "wa: exit-42 restart loop (${rapid} rapid restarts), pausing 60s (Ctrl+C to stop)" >&2
+    sleep 60
   fi
 done

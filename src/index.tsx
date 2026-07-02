@@ -235,6 +235,7 @@ function startRepl(client: WaClient, store: StoreQueries, db: ReturnType<typeof 
 function shutdown(client: WaClient | null, db: ReturnType<typeof initDb>) {
   log("shutdown", "Closing...");
   try { client?.sock.end(undefined); } catch {}
+  try { releaseLock(); } catch {}
   closeDb(db);
   process.exit(0);
 }
@@ -242,6 +243,19 @@ function shutdown(client: WaClient | null, db: ReturnType<typeof initDb>) {
 // ── REPL Main ───────────────────────────────────────────────────────
 
 async function runRepl() {
+  // Same single-instance lock as the TUI: a concurrent REPL would fight the
+  // TUI over the WhatsApp socket (440 stream conflicts) and clobber
+  // reconnect-state.json last-writer-wins, erasing pending cooldowns.
+  try {
+    acquireLock();
+  } catch (e) {
+    if (e instanceof InstanceLockError) {
+      console.error(e.message);
+      process.exit(1);
+    }
+    throw e;
+  }
+
   log("init", "whatsapp-tui-ts (REPL mode)");
 
   const db = initDb();

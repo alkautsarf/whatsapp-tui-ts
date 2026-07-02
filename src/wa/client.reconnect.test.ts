@@ -5,6 +5,8 @@ import {
   RECONNECT_CEILING_MS,
   RECONNECT_FLOOR_MS,
   CB_COOLDOWN_BASE_MS,
+  CONNECT_BUDGET,
+  BUDGET_FLOOR_MS,
   type ReconnectDecision,
   type ReconnectState,
 } from "./reconnect.ts";
@@ -150,5 +152,48 @@ describe("computeReconnect jitter", () => {
     const seq: Step[] = Array.from({ length: 50 }, (_, i) => cycle[i % 4]);
     const rows = run(seq, () => 0); // max negative jitter throughout
     expect(Math.min(...delaysOf(rows))).toBeGreaterThanOrEqual(RECONNECT_FLOOR_MS);
+  });
+});
+
+describe("computeReconnect rolling connect budget", () => {
+  it("raises the delay to the ~10m floor once the budget is spent", () => {
+    const d = computeReconnect({ ...RECONNECT_INITIAL }, CONNECTION_LOST, false, NO_JITTER, CONNECT_BUDGET);
+    expect(d.delay).toBe(BUDGET_FLOOR_MS);
+    expect(d.overBudget).toBe(true);
+    expect(d.inPenaltyBox).toBe(false);
+  });
+
+  it("leaves delays untouched below the budget", () => {
+    const d = computeReconnect({ ...RECONNECT_INITIAL }, CONNECTION_LOST, false, NO_JITTER, CONNECT_BUDGET - 1);
+    expect(d.delay).toBe(2000);
+    expect(d.overBudget).toBe(false);
+  });
+
+  it("[regression] a stable session does NOT dodge the budget floor (slow-flap case)", () => {
+    // The 2026-07-01 pattern: each session holds >30s so the breaker resets,
+    // but the account still burns 100+ logins/day. The budget must catch it.
+    const d = computeReconnect({ ...RECONNECT_INITIAL }, CONNECTION_CLOSED, true, NO_JITTER, CONNECT_BUDGET + 40);
+    expect(d.overBudget).toBe(true);
+    expect(d.delay).toBe(BUDGET_FLOOR_MS);
+  });
+
+  it("penalty-box cooldowns dominate the budget floor (no double-flagging)", () => {
+    const tripped: ReconnectState = { failures: 6, throttleRun: 6, cooldownCycle: 0 };
+    const d = computeReconnect(tripped, CONNECTION_CLOSED, false, NO_JITTER, CONNECT_BUDGET + 10);
+    expect(d.inPenaltyBox).toBe(true);
+    expect(d.overBudget).toBe(false);
+    expect(d.delay).toBe(CB_COOLDOWN_BASE_MS);
+  });
+
+  it("budget floor is jittered within +/-25%", () => {
+    const low = computeReconnect({ ...RECONNECT_INITIAL }, CONNECTION_LOST, false, () => 0, CONNECT_BUDGET).delay;
+    const high = computeReconnect({ ...RECONNECT_INITIAL }, CONNECTION_LOST, false, () => 1, CONNECT_BUDGET).delay;
+    expect(low).toBe(BUDGET_FLOOR_MS * 0.75);
+    expect(high).toBe(BUDGET_FLOOR_MS * 1.25);
+  });
+
+  it("zero connectsInWindow (tracking disabled) never flags overBudget", () => {
+    const d = computeReconnect({ ...RECONNECT_INITIAL }, CONNECTION_LOST, false, NO_JITTER, 0);
+    expect(d.overBudget).toBe(false);
   });
 });

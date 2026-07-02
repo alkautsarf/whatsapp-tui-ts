@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] - 2026-07-02
+
+### Added
+
+- **Reconnect state now survives restarts** (`src/wa/reconnect-store.ts`). The breaker's counters, any pending cooldown, and the rolling connect-attempt window persist to `~/.local/share/whatsapp-tui/reconnect-state.json` (atomic write-then-rename, strict shape validation, 24h record expiry). Restarting the app mid-cooldown (brew upgrade, Ctrl+P restart, crash) previously reset the backoff and fired an immediate fresh login burst, the exact behavior that feeds WhatsApp's 428 penalty box; now the remainder of the cooldown is served on startup (capped at 60m; `WA_TUI_IGNORE_COOLDOWN=1` skips it for deliberate probing, accepted values `1`/`true` only). State is cleared on logout and on fresh links so a re-pair always starts clean, and a stable connection (30s+) heals and persists the reset counters so stale penalty state cannot haunt later sessions.
+- **Rolling 24h connect budget** (`src/wa/reconnect.ts`). The circuit breaker only sees consecutive throttle closes since the last stable open, so a slow flap (connect, hold a minute, drop) reset it every cycle and still burned 100+ logins/day: the 2026-07-01 pattern that kept the account fed into the penalty box. Every connect attempt now counts against a 60-per-24h rolling budget; past it, reconnect delays get a jittered ~10m floor, enforced at startup too so restart loops cannot dodge it. Baileys' 515 restart-required close (the pairing handshake's mandated immediate reconnect) is exempt from backoff, breaker, and budget alike.
+- **macOS notifications for connection anomalies** via the existing notifier daemon: when the penalty box trips (once per episode), when the connect budget engages, and when a persisted throttle cooldown is resumed at startup. A disconnect storm now gets noticed in minutes instead of after a 7-hour silent outage.
+- **Restart-rate guard in `bin/wa`**. A pathological exit-42 loop is detected by app runtime (under 10s = looping) and pauses 60s between further restarts. Deliberate user restarts stay instant and reset the counter; the exit-42 restart semantics are unchanged.
+
+### Fixed
+
+- REPL mode (`--repl`) now acquires the same single-instance lock as the TUI, so a concurrent REPL can no longer fight the TUI over the WhatsApp socket (440 stream conflicts) or clobber the persisted reconnect state last-writer-wins.
+
 ## [0.5.6] - 2026-06-30
 
 ### Fixed
@@ -424,6 +437,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.6.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.6.0
 [0.5.6]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.6
 [0.5.5]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.5
 [0.5.4]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.4

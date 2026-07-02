@@ -25,6 +25,16 @@ export const CB_THRESHOLD = 6;
 export const CB_COOLDOWN_BASE_MS = 15 * 60_000; // first penalty-box cooldown: 15 min
 export const CB_COOLDOWN_CEILING_MS = 60 * 60_000; // cap escalating cooldown at 1 hr
 
+// Rolling connect budget. The breaker only sees CONSECUTIVE throttle closes
+// since the last stable open, so a slow flap (connect, hold a minute, drop)
+// resets it every cycle and can still log in 100+ times/day: the exact
+// pattern observed on 2026-07-01 that kept feeding the penalty box. The
+// budget counts every connect attempt in a rolling window regardless of
+// stability; past the budget, reconnect delays get a long jittered floor.
+export const CONNECT_BUDGET_WINDOW_MS = 24 * 60 * 60_000;
+export const CONNECT_BUDGET = 60; // healthy days log 1-5 attempts; sleep/wake churn ~10
+export const BUDGET_FLOOR_MS = 10 * 60_000; // min delay once over budget (pre-jitter)
+
 // A connection must stay open at least this long to count as "healthy". A
 // shorter open (a throttle flap that accepts the handshake then drops the
 // stream) must NOT reset the breaker accounting, otherwise repeated flaps each
@@ -48,6 +58,7 @@ export interface ReconnectState {
 export interface ReconnectDecision {
   delay: number; // ms to wait before the next connect()
   inPenaltyBox: boolean; // true => long escalating cooldown, false => normal backoff
+  overBudget: boolean; // true => rolling connect budget raised this delay's floor
   next: ReconnectState; // counters to carry into the next close
 }
 
@@ -60,12 +71,14 @@ function applyJitter(ms: number, rng: () => number): number {
 // Decide how long to wait before the next reconnect, given the prior state, the
 // close's status code, and whether the connection that just closed had been
 // open long enough to count as healthy. `rng` is injectable so tests are
-// deterministic.
+// deterministic. `connectsInWindow` is the caller-tracked count of connect
+// attempts inside CONNECT_BUDGET_WINDOW_MS (0 = budget tracking disabled).
 export function computeReconnect(
   prev: ReconnectState,
   statusCode: number | undefined,
   wasStableBeforeClose: boolean,
   rng: () => number = Math.random,
+  connectsInWindow = 0,
 ): ReconnectDecision {
   // A close that ended a genuinely healthy session starts the accounting fresh:
   // the prior session's stability means this close is a brand-new first failure.
@@ -93,7 +106,15 @@ export function computeReconnect(
     // Clamp AFTER jitter so the documented ceiling is a genuine hard cap.
     delay = Math.min(applyJitter(baseDelay, rng), RECONNECT_CEILING_MS);
   }
+  // Rolling-budget floor: a slow flap resets the breaker via brief opens but
+  // still burns dozens of logins a day. Once the window budget is spent,
+  // every reconnect waits ~10m (jittered) no matter how healthy the last
+  // session looked. Penalty-box cooldowns already exceed the floor.
+  const overBudget = !inPenaltyBox && connectsInWindow >= CONNECT_BUDGET;
+  if (overBudget) {
+    delay = Math.max(delay, applyJitter(BUDGET_FLOOR_MS, rng));
+  }
   delay = Math.max(RECONNECT_FLOOR_MS, delay);
 
-  return { delay, inPenaltyBox, next: { failures, throttleRun, cooldownCycle } };
+  return { delay, inPenaltyBox, overBudget, next: { failures, throttleRun, cooldownCycle } };
 }

@@ -13,13 +13,24 @@ import pino from "pino";
 import qrcode from "qrcode-terminal";
 import { existsSync } from "fs";
 import { log, ok, warn, err } from "../utils/log.ts";
+import { notify } from "../utils/notify.ts";
 import { AUTH_DIR } from "../utils/paths.ts";
 import {
   computeReconnect,
   RECONNECT_INITIAL,
   STABLE_OPEN_MS,
+  CB_COOLDOWN_CEILING_MS,
+  CONNECT_BUDGET,
+  BUDGET_FLOOR_MS,
   type ReconnectState,
 } from "./reconnect.ts";
+import {
+  loadReconnectPersist,
+  saveReconnectPersist,
+  clearReconnectPersist,
+  pruneConnectTimes,
+  type CooldownReason,
+} from "./reconnect-store.ts";
 
 export interface WaClient {
   sock: WASocket;
@@ -83,8 +94,90 @@ function initClientCore(options: ClientOptions): {
     let version = await fetchVersion();
 
     let reconnectState: ReconnectState = { ...RECONNECT_INITIAL };
+    let connectTimes: number[] = [];
+    let overBudgetNotified = false;
+    let penaltyNotified = false;
+
+    const persistNow = (cooldownUntil: number, reason: CooldownReason) => {
+      saveReconnectPersist({
+        savedAt: Date.now(),
+        cooldownUntil,
+        reason,
+        state: reconnectState,
+        connectTimes,
+      });
+    };
+
+    // Accept only "1"/"true": a truthiness check would treat
+    // WA_TUI_IGNORE_COOLDOWN=0 as "skip the safeguard", the opposite of
+    // what the user asked for.
+    const ignoreCooldown = ["1", "true"].includes(
+      (process.env.WA_TUI_IGNORE_COOLDOWN ?? "").toLowerCase(),
+    );
+
+    // Resume breaker/cooldown state from a previous run. Without this, any
+    // restart (brew upgrade, in-app Ctrl+P restart, crash) forgot a pending
+    // penalty-box cooldown and fired an immediate fresh login burst; the
+    // 2026-06-30 storm was sustained by exactly that. Deliberate probing can
+    // skip the wait with WA_TUI_IGNORE_COOLDOWN=1. A machine with no session
+    // (fresh link, or a re-pair after logout) starts clean instead: stale
+    // penalized counters must not haunt a brand-new link.
+    if (!hasSession) {
+      clearReconnectPersist();
+    }
+    const persisted = hasSession ? loadReconnectPersist(Date.now()) : null;
+    if (persisted) {
+      reconnectState = persisted.state;
+      connectTimes = persisted.connectTimes;
+      const remaining = persisted.cooldownUntil - Date.now();
+      if (remaining > 30_000 && !ignoreCooldown) {
+        const waitMs = Math.min(remaining, CB_COOLDOWN_CEILING_MS);
+        const mins = Math.round(waitMs / 60_000);
+        warn(
+          "wa",
+          `Resuming persisted ${persisted.reason} cooldown: waiting ${mins}m before connecting (WA_TUI_IGNORE_COOLDOWN=1 skips)`,
+        );
+        // Only a throttle-family wait warrants a system notification; an
+        // ordinary backoff remainder is routine and just logs.
+        if (persisted.reason !== "backoff") {
+          penaltyNotified = true;
+          notify({
+            title: "wa-tui: resuming cooldown",
+            body: `${mins}m of WhatsApp ${persisted.reason} cooldown left from the previous run`,
+            chatJid: "wa-tui:penalty-box",
+          });
+        }
+        options.onReconnecting?.(reconnectState.failures);
+        await new Promise((r) => setTimeout(r, waitMs));
+      }
+
+      // A process restart must not dodge the rolling connect budget either:
+      // without this gate, a restart loop sustains the exact login rate the
+      // budget exists to stop. The wait is relative to the LAST attempt, so
+      // a start hours later proceeds immediately.
+      const now = Date.now();
+      connectTimes = pruneConnectTimes(connectTimes, now);
+      if (connectTimes.length >= CONNECT_BUDGET && !ignoreCooldown) {
+        const budgetWait = BUDGET_FLOOR_MS - (now - Math.max(...connectTimes));
+        if (budgetWait > 0) {
+          warn(
+            "wa",
+            `Connect budget spent (${connectTimes.length} attempts in 24h): waiting ${Math.round(budgetWait / 1000)}s before connecting`,
+          );
+          options.onReconnecting?.(reconnectState.failures);
+          await new Promise((r) => setTimeout(r, budgetWait));
+        }
+      }
+    }
 
     async function connect() {
+      // Every connect attempt is a login WhatsApp's anti-abuse sees. Count it
+      // against the rolling 24h budget and persist immediately so a restart
+      // can't shed the history (this also clears any served cooldown).
+      const attemptAt = Date.now();
+      connectTimes = pruneConnectTimes([...connectTimes, attemptAt], attemptAt);
+      persistNow(0, "backoff");
+
       sock = makeWASocket({
         version,
         auth: {
@@ -121,6 +214,7 @@ function initClientCore(options: ClientOptions): {
       let lastEventAt = Date.now();
       let isOpen = false;
       let openedAt: number | null = null; // when this socket reached 'open', for stability gating
+      let stableResetTimer: ReturnType<typeof setTimeout> | null = null;
       const bumpLiveness = () => { lastEventAt = Date.now(); };
 
       const ws = (sock as any).ws;
@@ -154,6 +248,10 @@ function initClientCore(options: ClientOptions): {
         if (connection === "close") {
           isOpen = false;
           clearInterval(healthCheckInterval);
+          if (stableResetTimer) {
+            clearTimeout(stableResetTimer);
+            stableResetTimer = null;
+          }
           const boom = lastDisconnect?.error as Boom | undefined;
           const statusCode = boom?.output?.statusCode;
           // Boom message discriminates a local ws.close ("Connection Terminated")
@@ -163,6 +261,7 @@ function initClientCore(options: ClientOptions): {
 
           if (statusCode === DisconnectReason.loggedOut) {
             err("wa", "Logged out. Delete auth_state/ and restart.");
+            clearReconnectPersist();
             options.onDisconnected?.(statusCode);
             return;
           }
@@ -171,20 +270,71 @@ function initClientCore(options: ClientOptions): {
             version = await fetchVersion();
           }
 
+          // Baileys' restartRequired (515) is the protocol-mandated immediate
+          // reconnect that completes QR pairing. It is not a failure, so it
+          // bypasses backoff, breaker, and budget alike; flooring it at ~10m
+          // would strand a fresh link right after the QR scan.
+          if (statusCode === DisconnectReason.restartRequired) {
+            log("wa", "Restart required (pairing handshake), reconnecting immediately");
+            connect();
+            return;
+          }
+
           // Did this connection stay open long enough to count as healthy? If
           // so the breaker accounting resets; a brief throttle flap does not.
           const wasStable = openedAt !== null && Date.now() - openedAt >= STABLE_OPEN_MS;
           openedAt = null;
 
-          const decision = computeReconnect(reconnectState, statusCode, wasStable);
+          // Prune BEFORE deciding: a stale over-24h count would floor the
+          // delay at ~10m after a perfectly healthy day-long session.
+          connectTimes = pruneConnectTimes(connectTimes, Date.now());
+          const decision = computeReconnect(
+            reconnectState,
+            statusCode,
+            wasStable,
+            Math.random,
+            connectTimes.length,
+          );
           reconnectState = decision.next;
+          // Persist before sleeping so a restart mid-delay serves the
+          // remainder instead of connecting immediately.
+          persistNow(
+            Date.now() + decision.delay,
+            decision.inPenaltyBox ? "penalty-box" : decision.overBudget ? "budget" : "backoff",
+          );
+
+          if (decision.overBudget) {
+            warn(
+              "wa",
+              `Connect budget exceeded (${connectTimes.length} attempts in 24h, budget ${CONNECT_BUDGET}): reconnect delay floored at ~10m`,
+            );
+            if (!overBudgetNotified) {
+              overBudgetNotified = true;
+              notify({
+                title: "wa-tui: connection flapping",
+                body: `${connectTimes.length} connect attempts in 24h (budget ${CONNECT_BUDGET}): slowing reconnects to ~10m`,
+                chatJid: "wa-tui:budget",
+              });
+            }
+          } else if (!decision.inPenaltyBox) {
+            overBudgetNotified = false;
+          }
 
           if (decision.inPenaltyBox) {
             warn(
               "wa",
               `428 penalty-box (run=${reconnectState.throttleRun}, cycle=${reconnectState.cooldownCycle}) [${reason ?? "?"}]: long cooldown ${Math.round(decision.delay / 60000)}m before retry`,
             );
+            if (!penaltyNotified) {
+              penaltyNotified = true;
+              notify({
+                title: "wa-tui: WhatsApp throttling",
+                body: `Penalty box tripped: cooling down ${Math.round(decision.delay / 60000)}m before retry (cycle ${reconnectState.cooldownCycle})`,
+                chatJid: "wa-tui:penalty-box",
+              });
+            }
           } else {
+            penaltyNotified = false;
             warn(
               "wa",
               `Disconnected (${statusCode}${reason ? " " + reason : ""}), reconnecting in ${Math.round(decision.delay / 1000)}s (failure ${reconnectState.failures})`,
@@ -198,6 +348,18 @@ function initClientCore(options: ClientOptions): {
           openedAt = Date.now();
           isOpen = true;
           bumpLiveness();
+          // Heal the breaker once stability is proven and PERSIST the healed
+          // state. Without this, penalized counters saved during a storm
+          // survive a clean shutdown indefinitely and re-trip on the next
+          // boot's first wobble.
+          if (stableResetTimer) clearTimeout(stableResetTimer);
+          stableResetTimer = setTimeout(() => {
+            if (!isOpen) return;
+            reconnectState = { ...RECONNECT_INITIAL };
+            penaltyNotified = false;
+            overBudgetNotified = false;
+            persistNow(0, "backoff");
+          }, STABLE_OPEN_MS);
           ok("wa", "Connected to WhatsApp!");
           const me = sock.user;
           if (me) {
