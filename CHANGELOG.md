@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.1] - 2026-07-03
+
+### Fixed
+
+- **Phone push silently suppressed while wa-tui is backgrounded under tmux** (`src/utils/terminal-focus.ts`). The focus-to-presence bridge learned "you looked away" only from an xterm mode-1004 FOCUS_OUT, but tmux does not deliver that event to a pane whose session you switch AWAY from (wa-tui runs in its own dedicated `wa-tui` session and is left via `prefix a`, a switch-client, not a clean detach). So `focused` stayed stuck at true, wa-tui kept broadcasting presence `available`, and WhatsApp suppressed phone notifications for as long as it believed a linked device was active: an ~11h dead-notification window on 2026-07-03 with the connection otherwise healthy (no 428 storm this time). Fix: a tmux attach-state poller reconciles focus against the pane's real `session_attached`/`window_active`/`pane_active` and forces focus OFF the moment the pane is no longer actually being viewed. It ONLY ever forces focus off (a real FOCUS_IN, which tmux does deliver on switch-IN, is still the only thing that turns it back on), so a missed event can never re-suppress push; the tmux query is async and 1s-timeout-bounded so a wedged tmux can't stall the TUI, and the poll short-circuits once backgrounded so steady-state cost is zero subprocesses rather than one every tick. Pure `parseTmuxAttended` + `focusOverrideFromPoll` (typed `false | null` so a poll can never force focus on) covered by unit tests in `src/utils/terminal-focus.test.ts`.
+
 ## [0.6.0] - 2026-07-02
 
 ### Added
@@ -437,6 +443,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.6.1]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.6.1
 [0.6.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.6.0
 [0.5.6]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.6
 [0.5.5]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.5
