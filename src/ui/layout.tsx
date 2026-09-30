@@ -21,6 +21,8 @@ import { log } from "../utils/log.ts";
 import { getRawMessage, downloadAndCache } from "../wa/media.ts";
 import { parsePlaceholders, clearPending, type PendingAttachment } from "../utils/attachment-registry.ts";
 import { finalizeMentions, clearMentions } from "../utils/mention-registry.ts";
+import { MUTE_NONE, describeMute, muteUntilForOption } from "../utils/mute.ts";
+import { setChatMute, syncMuteState, MuteUnconfirmedError, MUTE_CONFIRM_TIMEOUT_MS } from "../wa/mute.ts";
 import type { StoreQueries } from "../store/queries.ts";
 import type { WASocket, WAMessageKey } from "@whiskeysockets/baileys";
 import type { InputMethods } from "./types.ts";
@@ -349,6 +351,37 @@ export function Layout(props: {
       return;
     }
 
+    if (payload.intent === "mute-chat") {
+      const jid = payload.data?.jid as string | undefined;
+      if (!jid) return;
+      const sock = props.getSock();
+      if (!sock || store.connection.status !== "connected") {
+        // Mute lives on WhatsApp's side (it syncs to the phone), so there is
+        // no honest local-only version of it.
+        helpers.showToast("Not connected: mute needs WhatsApp", "error", 3000);
+        return;
+      }
+      const nowSec = Math.floor(Date.now() / 1000);
+      const until = value === "unmute" ? MUTE_NONE : muteUntilForOption(value, nowSec);
+      if (until === null) return;
+      // Stays up until the result toast replaces it.
+      helpers.showToast(until === MUTE_NONE ? "Unmuting\u2026" : "Muting\u2026", "info", MUTE_CONFIRM_TIMEOUT_MS);
+      try {
+        await setChatMute(sock, props.queries, jid, until);
+        helpers.refreshChats();
+        helpers.showToast(until === MUTE_NONE ? "Unmuted" : `Chat ${describeMute(until, nowSec)}`, "info", 2500);
+      } catch (e) {
+        if (e instanceof MuteUnconfirmedError) {
+          // Not a rejection: if WhatsApp still applies it, the chat updates
+          // on its own through the normal chats.update event.
+          helpers.showToast("No confirmation from WhatsApp yet; it may still apply", "error", 5000);
+        } else {
+          helpers.showToast(`Mute failed: ${(e as Error)?.message ?? "unknown"}`, "error", 4000);
+        }
+      }
+      return;
+    }
+
     if (payload.intent === "save-media") {
       const msgId = payload.data?.msgId as string | undefined;
       if (!msgId) return;
@@ -447,7 +480,25 @@ export function Layout(props: {
         <SearchOverlay queries={props.queries} />
       </Show>
       <Show when={store.overlay?.type === "command-palette"}>
-        <CommandPalette onQuit={props.onQuit} />
+        <CommandPalette
+          onQuit={props.onQuit}
+          onResyncMutes={() => {
+            const sock = props.getSock();
+            if (!sock || store.connection.status !== "connected") {
+              helpers.showToast("Not connected", "error", 3000);
+              return;
+            }
+            helpers.showToast("Resyncing mute settings…", "info", 2000);
+            syncMuteState(sock, props.queries)
+              .then(({ muted }) => {
+                helpers.refreshChats();
+                helpers.showToast(`Mute settings synced: ${muted} muted`, "info", 3000);
+              })
+              .catch((e) =>
+                helpers.showToast(`Mute resync failed: ${(e as Error)?.message ?? "unknown"}`, "error", 4000),
+              );
+          }}
+        />
       </Show>
       <Show when={store.overlay?.type === "help"}>
         <HelpOverlay />

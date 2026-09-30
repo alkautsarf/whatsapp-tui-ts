@@ -17,7 +17,13 @@ export function buildQRLines(input: string): QRCell[][] {
   qr.make();
 
   const size = qr.getModuleCount();
-  const quiet = 1; // quiet zone padding
+  // The QR spec mandates a 4-module quiet zone; scanners use that border to
+  // locate the three finder patterns. This was 1, which rendered a QR that
+  // looked correct to a human but that WhatsApp's scanner could not lock onto
+  // (2026-08-14: elpabl0 could not scan the pairing code at all). Do not shrink
+  // it to save terminal rows: at 4 modules the zone costs only 2 extra
+  // terminal rows top and bottom, since each row packs 2 modules via ▀.
+  const quiet = 4;
   const total = size + quiet * 2;
 
   const WHITE = "#ffffff";

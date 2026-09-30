@@ -60,15 +60,21 @@ This is a TypeScript rewrite of the original [Rust whatsapp-tui](https://github.
 - `gg/G` jump to top/bottom
 - `y` yank message text to clipboard (OSC 52, works through tmux)
 
+**Mute**
+- `m` mutes or unmutes the highlighted chat (chat list) or the open chat (messages): 8 hours, 1 week, or Always
+- Two-way sync with your phone: mute a chat on the phone and wa-tui stops notifying for it, mute it in wa-tui and the phone follows
+- Muted chats show `⊘` beside a grey unread count; they still collect unread messages, they just stay quiet
+- `Ctrl+P` → "Resync mute settings from phone" re-reads every chat's mute state if the two ever drift
+
 **Reliability**
-- Full history sync from baileys, persisted to local SQLite (WAL mode)
+- History sync from baileys (bootstrap and recent history on link), persisted to local SQLite (WAL mode)
 - Socket liveness check forces reconnect if WhatsApp stops sending frames (zombie socket recovery)
 - Background daemon can fire native notifications even when wa-tui is in another tmux session
 
 **Native macOS notifications (optional)**
 - Banner popups with the WhatsApp icon, Glass sound, and proper Notification Center grouping
 - Per-chat rate limiting (3s)
-- Respects WhatsApp mute settings
+- Respects WhatsApp mute settings, synced from your phone (see **Mute** above)
 - Suppresses when you're actually viewing the chat (uses xterm focus reporting to know whether the wa-tui terminal is in front)
 - See [Native notifications setup](#native-notifications-macos-only-optional) below
 
@@ -114,6 +120,7 @@ chat list (NORMAL mode)
    ├─ j/k        navigate chats
    ├─ /          search chats
    ├─ Enter      open selected chat
+   ├─ m          mute / unmute chat
    ├─ Ctrl+P     command palette
    └─ q          quit
                 │
@@ -255,6 +262,7 @@ src/
 │   ├── client.ts          # baileys connection, auth state, liveness check
 │   ├── handlers.ts        # event handlers (messages, chats, contacts, presence, groups)
 │   ├── media.ts           # media download + raw message cache
+│   ├── mute.ts            # mute / unmute a chat, resync mute state from the phone
 │   └── message-types.ts   # MEDIA_TYPES, SKIP_MESSAGE_TYPES, mediaLabel()
 ├── store/
 │   ├── db.ts              # SQLite init, schema, foreign-DB detection
@@ -284,6 +292,7 @@ notifier/
 
 ```bash
 bunx tsc --noEmit          # type check
+bun test                   # unit tests (src/**/*.test.ts)
 bun run test.ts            # baileys validation harness
 ```
 

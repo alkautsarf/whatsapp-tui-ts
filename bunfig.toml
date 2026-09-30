@@ -2,3 +2,7 @@ preload = ["./ws-override.ts", "@opentui/solid/preload"]
 
 [install]
 peer = false
+
+# `bun test` ignores the top-level preload; .tsx tests need the Solid JSX transform.
+[test]
+preload = ["@opentui/solid/preload"]

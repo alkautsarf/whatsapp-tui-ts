@@ -15,6 +15,7 @@ import { existsSync } from "fs";
 import { log, ok, warn, err } from "../utils/log.ts";
 import { notify } from "../utils/notify.ts";
 import { AUTH_DIR } from "../utils/paths.ts";
+import { resyncContacts } from "./app-state.ts";
 import {
   computeReconnect,
   RECONNECT_INITIAL,
@@ -187,18 +188,42 @@ function initClientCore(options: ClientOptions): {
         logger,
         browser: Browsers.macOS("Desktop"),
         generateHighQualityLinkPreview: false,
-        // Only request a full history sync when there is no registered identity
-        // yet, i.e. a genuine first link (or a re-pair after creds were lost or
-        // corrupted). After the 2026-06-30 storm we confirmed (two probes 80s
-        // apart) that WhatsApp rejects the heavy full-history-sync handshake with
-        // 428 while an account is in its post-storm penalty state, yet accepts a
-        // lightweight connect. Gate on the PARSED creds (`creds.me`, the same
-        // signal Baileys uses to choose login vs register), read fresh on every
-        // connect(): an established session already has its history in the local
-        // DB and connects lightweight, a corrupt creds.json (me=undefined) still
-        // backfills on re-pair, and a session linked mid-process drops to
-        // lightweight as soon as `me` is populated (so reconnects don't re-trip).
-        syncFullHistory: !state.creds.me,
+        // With qrTimeout unset, Baileys shows the first pairing QR for 60s and
+        // each later one for only 20s; the server hands out 6 refs, so it gives
+        // up after ~160s with "408 QR refs attempts ended". 20s is not enough
+        // time to walk to a phone, open WhatsApp, reach Linked Devices and scan
+        // a 61-module code off a terminal. 2026-08-14: elpabl0 burned several
+        // cycles this way while the rendered QR was provably valid.
+        //
+        // qrTimeout applies to EVERY ref, so each code now lives 180s. Known
+        // side effect (one sample, 2026-08-14): the server ended an unscanned
+        // pairing socket itself at ~211s with a 428, which, unlike the old 408,
+        // counts toward the circuit breaker. An idle QR screen left up for
+        // ~20 min can therefore trip a cooldown; restarting clears it.
+        qrTimeout: 180_000,
+        // ALWAYS false. Never gate this on `!state.creds.me` again.
+        //
+        // In Baileys, syncFullHistory is not a history knob on the login path.
+        // With our `Browsers.macOS("Desktop")` tuple, getWebInfo maps it
+        // straight to webSubPlatform (true => DARWIN, false => WEB_BROWSER);
+        // on registration it additionally sets DeviceProps.requireFullSync.
+        // WhatsApp currently refuses the `true` form from this account.
+        //
+        // The old `!state.creds.me` gate was a catch-22 that made re-linking
+        // structurally impossible: creds.me is undefined precisely during a
+        // fresh pair, so the flag flipped true exactly when we needed a QR, and
+        // WhatsApp killed the socket with 428 before ever issuing one. Proven by
+        // A/B on 2026-08-14 with identical config, version and auth dir:
+        //   syncFullHistory=false -> QR ISSUED (1613ms)
+        //   syncFullHistory=true  -> 428 Connection Terminated (665ms)
+        // That is why the 2026-08-14 outage could not be recovered by re-linking.
+        //
+        // Cost of hardcoding false: close to nothing. A fresh link still
+        // receives the bootstrap, recent and push-name history batches (the
+        // 2026-08-14 re-link ingested ~27k messages this way). Only the FULL
+        // tier is forgone, and Baileys' default shouldSyncHistoryMessage
+        // discards that tier anyway.
+        syncFullHistory: false,
         // Don't auto-broadcast 'available' on every connect. WhatsApp's server
         // suppresses phone push notifications whenever any linked device is
         // online, so we take explicit ownership of presence and flip it based
@@ -348,6 +373,30 @@ function initClientCore(options: ClientOptions): {
           openedAt = Date.now();
           isOpen = true;
           bumpLiveness();
+
+          // Opt-in recovery: re-fetch the address book from scratch.
+          // Saved contact names live on the phone and reach us through app
+          // state. If they get lost or clobbered (see the mask-vs-name note on
+          // upsertContactStmt), this pulls them again. Env-gated because a
+          // from-scratch read is relatively expensive and pointless on a
+          // healthy session.
+          //
+          // This must NOT be sock.resyncAppState(..., true), which is what it
+          // was at first: on a linked session that fetches only patches newer
+          // than the stored version, so it re-downloads nothing (the
+          // 2026-08-15 "resync" that returned identical data in 0.6s never
+          // actually re-read the address book). See wa/app-state.ts.
+          if (["1", "true"].includes((process.env.WA_TUI_RESYNC_CONTACTS ?? "").toLowerCase())) {
+            log("wa", "WA_TUI_RESYNC_CONTACTS=1: re-reading address book from scratch");
+            const resyncSock = sock;
+            // Deferred so the contacts.upsert handlers registered by
+            // onConnected (just below) are in place before the replay.
+            setTimeout(() => {
+              resyncContacts(resyncSock)
+                .then((n) => log("wa", `Address-book resync complete: ${n} contact records replayed`))
+                .catch((e) => warn("wa", `Address-book resync failed: ${(e as Error)?.message ?? e}`));
+            }, 5_000);
+          }
           // Heal the breaker once stability is proven and PERSIST the healed
           // state. Without this, penalized counters saved during a storm
           // survive a clean shutdown indefinitely and re-trip on the next

@@ -4,6 +4,8 @@ import { useTheme } from "../theme.tsx";
 import type { StoreQueries } from "../../store/queries.ts";
 import { mediaLabel } from "../../wa/message-types.ts";
 import { resolveMentionDisplay, truncate } from "../../utils/text.ts";
+import { isMuted } from "../../utils/mute.ts";
+import { useNowSec } from "../now.ts";
 
 function formatTime(ts: number | null | undefined): string {
   if (!ts) return "";
@@ -47,6 +49,9 @@ export function ChatList(props: { queries: StoreQueries; scrollRef?: (el: any) =
   const theme = useTheme();
 
   const isFocused = () => store.focusZone === "chat-list";
+  // Ticks so a timed mute's marker disappears when the mute runs out, not
+  // whenever the list next happens to refresh.
+  const nowSec = useNowSec();
 
   return (
     <box
@@ -80,6 +85,7 @@ export function ChatList(props: { queries: StoreQueries; scrollRef?: (el: any) =
               const time = () => formatTime(chat.last_msg_ts);
               const unread = () => chat.unread ?? 0;
               const isPinned = () => (chat.pinned ?? 0) > 0;
+              const muted = () => isMuted(chat.muted_until, nowSec());
 
               const preview = () => {
                 const text = chat.last_msg_text;
@@ -123,9 +129,12 @@ export function ChatList(props: { queries: StoreQueries; scrollRef?: (el: any) =
                       <text fg={theme.textMuted}>
                         {" " + preview()}
                       </text>
-                      <Show when={unread() > 0}>
-                        <text fg={theme.unread}>
-                          {" " + String(unread())}
+                      {/* Muted marker sits beside the unread count, like the
+                          crossed speaker on the phone. It lives on this line
+                          because line 1 has no width to spare. */}
+                      <Show when={unread() > 0 || muted()}>
+                        <text fg={muted() ? theme.textMuted : theme.unread}>
+                          {(muted() ? " ⊘" : "") + (unread() > 0 ? " " + String(unread()) : "")}
                         </text>
                       </Show>
                     </box>

@@ -10,7 +10,7 @@ interface Action {
   handler: () => void;
 }
 
-export function CommandPalette(props: { onQuit: () => void }) {
+export function CommandPalette(props: { onQuit: () => void; onResyncMutes: () => void }) {
   const { store, helpers } = useAppStore();
   const theme = useTheme();
   const dims = useTerminalDimensions();
@@ -39,7 +39,7 @@ export function CommandPalette(props: { onQuit: () => void }) {
 
   const actions: Action[] = [
     { name: "Search chats", shortcut: "/", handler: () => { helpers.setOverlay({ type: "search" }); helpers.setMode("search"); } },
-    { name: "Show help (keybindings)", shortcut: "?", handler: () => { helpers.setOverlay({ type: "help" }); helpers.setHelpScrollOffset?.(0); } },
+    { name: "Show help (keybindings)", shortcut: "?", handler: () => { helpers.setOverlay({ type: "help" }); helpers.setHelpScrollOffset?.(0); helpers.setMode("normal"); } },
     { name: "Insert mode", shortcut: "i", handler: () => { helpers.setMode("insert"); helpers.setFocusZone("input"); } },
     { name: "Focus chat list", shortcut: "h", handler: () => helpers.setFocusZone("chat-list") },
     { name: "Focus messages", shortcut: "l", handler: () => helpers.setFocusZone("messages") },
@@ -50,6 +50,8 @@ export function CommandPalette(props: { onQuit: () => void }) {
     { name: "Save selected media", shortcut: "s", handler: () => helpers.setFocusZone("messages") },
     { name: "Yank selected text", shortcut: "y", handler: () => helpers.setFocusZone("messages") },
     { name: "Show chat / group info", shortcut: "gi", handler: () => helpers.setFocusZone("messages") },
+    { name: "Mute / unmute chat", shortcut: "m", handler: () => helpers.openMuteDialog() },
+    { name: "Resync mute settings from phone", shortcut: "", handler: props.onResyncMutes },
     { name: "Restart wa-tui", shortcut: "", handler: restartApp },
     { name: "Quit", shortcut: "q", handler: props.onQuit },
   ];
@@ -74,12 +76,19 @@ export function CommandPalette(props: { onQuit: () => void }) {
     if (evt.name === "return") {
       const action = filtered()[selectedIdx()];
       if (action) {
-        // Run the action BEFORE closing — some handlers (like restartApp)
-        // need to run while overlay state is still set, and modes that the
-        // handler sets (e.g. setMode("search") for nested overlays) must
-        // not be clobbered by close()'s setMode("normal").
+        // Run the action BEFORE closing: some handlers (like restartApp)
+        // need to run while overlay state is still set.
         action.handler();
-        close();
+        // Only close if the palette is still the active overlay. A handler
+        // that opened its own overlay (search, help, the mute dialog) has
+        // already replaced us, and closing here would tear that one down.
+        // Likewise only drop back to normal mode if the handler left the
+        // mode alone: "Insert mode" sets it, and resetting it here left the
+        // app in normal mode with the input focused.
+        if (store.overlay?.type === "command-palette") {
+          helpers.setOverlay(null);
+          if (store.mode === "search") helpers.setMode("normal");
+        }
       }
       evt.preventDefault();
       return;

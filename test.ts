@@ -297,7 +297,10 @@ async function connect() {
     logger,
     browser: Browsers.macOS("Desktop"),
     generateHighQualityLinkPreview: false,
-    syncFullHistory: true,
+    // Must stay false, same as src/wa/client.ts: with Browsers.macOS("Desktop")
+    // `true` logs in as DARWIN, which WhatsApp answers with 428 for this
+    // account, and this harness has no breaker or connect budget around it.
+    syncFullHistory: false,
     getMessage: async (key: WAMessageKey): Promise<WAMessageContent | undefined> => {
       return undefined;
     },

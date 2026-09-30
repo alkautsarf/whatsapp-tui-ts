@@ -3,6 +3,8 @@ import { createStore, type SetStoreFunction } from "solid-js/store";
 import type { StoreQueries, ChatRow, MessageRow, ContactRow } from "../store/queries.ts";
 import { log } from "../utils/log.ts";
 import { isTerminalFocused } from "../utils/terminal-focus.ts";
+import { MUTE_OPTIONS, isMuted, describeMute } from "../utils/mute.ts";
+import { truncate } from "../utils/text.ts";
 import type {
   AppStore,
   AppMode,
@@ -44,6 +46,9 @@ export interface AppStoreHelpers {
   showToast(message: string, level?: "error" | "info", durationMs?: number): void;
   clearToast(): void;
   setHelpScrollOffset(offset: number): void;
+  /** Open the mute / unmute dialog. With no jid it targets the chat under
+   *  the cursor (chat list focused) or the open chat (anywhere else). */
+  openMuteDialog(jid?: string): void;
   createBridge(): ReactiveBridge;
 }
 
@@ -172,6 +177,48 @@ export function createAppStore(queries: StoreQueries): [AppStore, SetStoreFuncti
     clearToast() { setStore("toast", null); },
 
     setHelpScrollOffset(offset) { setStore("helpScrollOffset", Math.max(0, offset)); },
+
+    openMuteDialog(jid) {
+      const target = jid
+        ?? (store.focusZone === "chat-list" ? store.highlightedChatJid : null)
+        ?? store.selectedChatJid
+        ?? store.highlightedChatJid;
+      if (!target) {
+        helpers.showToast("No chat selected", "info", 2000);
+        return;
+      }
+      // Read mute state from the DB, not the reactive list: the list is a
+      // snapshot and this decides which set of options to offer.
+      const chat = queries.getChat(target);
+      const name = truncate(chat?.name || queries.resolveContactName(target), 40);
+      const nowSec = Math.floor(Date.now() / 1000);
+      const muted = isMuted(chat?.muted_until, nowSec);
+      setStore("overlay", {
+        type: "confirm",
+        confirm: muted
+          ? {
+              title: "Unmute chat",
+              message: `${name} is ${describeMute(chat?.muted_until, nowSec)}`,
+              options: [
+                { label: "Unmute", value: "unmute" },
+                { label: "Cancel", value: "cancel" },
+              ],
+              intent: "mute-chat",
+              data: { jid: target },
+            }
+          : {
+              title: "Mute notifications",
+              message: name,
+              options: [
+                ...MUTE_OPTIONS.map(({ label, value }) => ({ label, value })),
+                { label: "Cancel", value: "cancel" },
+              ],
+              intent: "mute-chat",
+              data: { jid: target },
+            },
+      });
+      setStore("mode", "search"); // borrows search mode so the modal's input gets keys
+    },
 
     createBridge(): ReactiveBridge {
       return {

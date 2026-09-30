@@ -604,6 +604,10 @@ export function App(props: {
       helpers.setMode("search");
     },
 
+    onMuteChat() {
+      helpers.openMuteDialog();
+    },
+
   });
 
   return (

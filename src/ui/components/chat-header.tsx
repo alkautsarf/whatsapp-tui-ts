@@ -2,6 +2,8 @@ import { Show, createMemo, createSignal, onCleanup } from "solid-js";
 import { useAppStore } from "../state.tsx";
 import { useTheme } from "../theme.tsx";
 import type { StoreQueries } from "../../store/queries.ts";
+import { describeMute } from "../../utils/mute.ts";
+import { useNowSec } from "../now.ts";
 
 export function ChatHeader(props: { queries: StoreQueries }) {
   const { store } = useAppStore();
@@ -19,12 +21,17 @@ export function ChatHeader(props: { queries: StoreQueries }) {
     return store.selectedChatJid?.endsWith("@g.us") ?? false;
   });
 
+  const nowSec = useNowSec();
+
   const subtitle = createMemo(() => {
     const jid = store.selectedChatJid;
     if (!jid) return "";
-    if (isGroup()) return "group";
+    const chat = store.chats.find((c) => c.jid === jid);
+    const mute = describeMute(chat?.muted_until, nowSec());
+    const suffix = mute ? ` · ${mute}` : "";
+    if (isGroup()) return "group" + suffix;
     const phone = jid.split("@")[0];
-    return phone ? `+${phone}` : "";
+    return (phone ? `+${phone}` : "") + suffix;
   });
 
   // Typing indicator — tick every 2s to expire stale entries

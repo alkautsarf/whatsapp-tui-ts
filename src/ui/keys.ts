@@ -26,6 +26,7 @@ export function useAppKeyboard(actions: {
   onReactMessage?: () => void;
   onForwardMessage?: () => void;
   onShowChatInfo?: () => void;
+  onMuteChat?: () => void;
 }) {
   const { store, helpers } = useAppStore();
 
@@ -118,6 +119,16 @@ export function useAppKeyboard(actions: {
 
     // ── Normal mode ──────────────────────────────────────────────
     evt.preventDefault();
+
+    // The pairing-QR and disconnected screens render no layout, so an overlay
+    // opened from them would be invisible while still capturing the keyboard
+    // (and would swallow the `q` those screens tell the user to press). Only
+    // quitting works there.
+    const status = store.connection.status;
+    if (status === "qr" || status === "disconnected") {
+      if (evt.name === "q" && !evt.ctrl && !evt.meta) actions.onQuit();
+      return;
+    }
 
     // Command palette. Switch to "search" mode so the global key handler
     // passes keys through to the palette's focused input — without this,
@@ -351,6 +362,15 @@ export function useAppKeyboard(actions: {
     if (evt.name === "f" && !evt.ctrl && !evt.meta) {
       if (store.focusZone === "messages") {
         actions.onForwardMessage?.();
+      }
+      return;
+    }
+
+    // Mute / unmute (`m`): the chat under the cursor in the chat list, the
+    // open chat from the messages zone. Opens the mute dialog.
+    if (evt.name === "m" && !evt.ctrl && !evt.meta && !evt.shift) {
+      if (store.focusZone === "chat-list" || store.focusZone === "messages") {
+        actions.onMuteChat?.();
       }
       return;
     }

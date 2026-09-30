@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0] - 2026-09-30
+
+### Added
+
+- **Mute sync, both ways.** `m` mutes or unmutes the highlighted chat (chat list) or the open chat (messages): 8 hours, 1 week, Always. The change goes to WhatsApp and shows on the phone; the local row is written only after WhatsApp confirms. Muted chats show `⊘` beside a grey unread count and "muted" / "muted until ..." in the chat header. Also in the command palette, along with "Resync mute settings from phone".
+- **One-time mute recovery** (`src/wa/mute.ts`, `src/wa/app-state.ts`). Shortly after connecting, wa-tui reads every chat's mute state from WhatsApp once per linked device and applies it to chats it already has. `sock.resyncAppState()` cannot do this: on a linked session it only fetches patches newer than the stored version, and with its second argument `true` it parks chat updates in Baileys' event buffer for good. `fetchAppStateMutations()` sends the version-0 request itself and decodes with Baileys' own helpers, writing nothing to the auth key store.
+- Pairing screen: a one-line hint when there is a spare row, and a "pane too small, needs WxH" message instead of a code that cannot scan.
+- Unit tests for all of the above (`bun test`, 119 tests), including the real app driven through the OpenTUI test renderer and an offline encrypted app-state round trip. `bunfig.toml` gained a `[test]` preload for `.tsx` tests.
+
+### Fixed
+
+- **Chats muted on the phone still notified.** The chat upsert only accepted mute values above 0, so "Always" (which WhatsApp sends as -1) was dropped for any chat whose row already existed, and an unmute never cleared. Mute, pin and archive are now tri-state on the way in: no information keeps the stored value, anything else is the new truth. For archive this also fixes an unarchived chat staying hidden from the list.
+- **Timed mutes never expired.** They were stored in WhatsApp's milliseconds and compared against seconds. Stored form is now seconds (schema v4 rescales existing rows; the 0.6.1 build can still open the database).
+- **Re-linking was impossible** (the 2026-08-14 outage). `syncFullHistory` was gated on `!creds.me`, which is true exactly during a fresh pair; with `Browsers.macOS("Desktop")` that logs in as DARWIN and WhatsApp answered 428 before issuing a QR. Now always `false`. A fresh link still receives bootstrap and recent history; only the full tier, which Baileys discards by default, is skipped.
+- **Pairing QR could not be scanned.** Quiet zone was 1 module (the spec requires 4); title and hint rows pushed the bottom of the code off a 36-row pane; and on a pane even one row short, rows were deleted from the middle of the code while it still looked complete. `qrTimeout` is now 180s per code (Baileys' own timing is 60s for the first code, then 20s each).
+- **Saved contact names replaced by privacy masks.** A masked number such as `+62∙∙∙∙∙∙∙∙∙59` can no longer overwrite a stored name, and display prefers the push name over a mask, including a push name filed on the contact's `@lid` sibling row and the message's own push name in bubbles and notifications. A real name that merely contains a bullet is not treated as a mask.
+- `WA_TUI_RESYNC_CONTACTS=1` now really re-reads the address book from scratch. The earlier version called `resyncAppState(..., true)` and re-downloaded nothing.
+- Command palette: an action that opened its own overlay (Search chats, Show help) was closed again at once, and "Insert mode" was reset to normal.
+- `test.ts` harness no longer connects with `syncFullHistory: true`.
+
+### Changed
+
+- `@whiskeysockets/baileys` pinned to exactly `7.0.0-rc14` (was `^7.0.0-rc.9`, held at rc.9 by the lockfile).
+
 ## [0.6.1] - 2026-07-03
 
 ### Fixed
@@ -443,6 +467,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.7.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.7.0
 [0.6.1]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.6.1
 [0.6.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.6.0
 [0.5.6]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.5.6

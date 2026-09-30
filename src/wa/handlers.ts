@@ -9,6 +9,8 @@ import type { ReactiveBridge } from "../ui/state.tsx";
 import { log, warn } from "../utils/log.ts";
 import { notify } from "../utils/notify.ts";
 import { isTerminalFocused } from "../utils/terminal-focus.ts";
+import { MUTE_ALWAYS, MUTE_NONE, isMuted, normalizeMuteUntil } from "../utils/mute.ts";
+import { resolveSenderName } from "../utils/text.ts";
 import { cacheRawMessage } from "./media.ts";
 import { MEDIA_TYPES, SKIP_MESSAGE_TYPES, mediaLabel } from "./message-types.ts";
 
@@ -41,6 +43,46 @@ function convertContact(c: any): ContactRow {
   };
 }
 
+/**
+ * Mute state carried by a chat object, or undefined when it carries none.
+ *
+ * Most chat events (unread counts, timestamps, new chats) say nothing about
+ * mute, and undefined tells the upsert to keep what is stored. The test is an
+ * own-property check on purpose:
+ *   - an app-state unmute arrives as an own `muteEndTime: null`, which must
+ *     clear the mute;
+ *   - a history-sync chat is a protobuf object whose ABSENT muteEndTime also
+ *     reads as null (through the prototype), which must not.
+ *
+ * The value's TYPE says where it came from, which matters for a zero:
+ *   - app state always yields a plain number or null. null is an unmute; a
+ *     number 0 is `muted: true` with no end time, since Baileys never sends
+ *     0 for an unmute. This holds even on a history chat: the event buffer
+ *     merges app-state updates into buffered history chats.
+ *   - history sync yields a protobuf Long. A zero there is "unmuted" or
+ *     merely "not populated", which cannot be told apart, so history may set
+ *     a mute but never clear one. App state is the authority for unmutes.
+ */
+export function muteFromChat(c: any): number | undefined {
+  if (!hasOwn(c, "muteEndTime")) return undefined;
+  const raw = c.muteEndTime;
+  if (raw === null) return MUTE_NONE;
+  const until = normalizeMuteUntil(raw);
+  if (until !== MUTE_NONE) return until;
+  return typeof raw === "number" ? MUTE_ALWAYS : undefined;
+}
+
+function hasOwn(c: any, key: string): boolean {
+  return !!c && Object.prototype.hasOwnProperty.call(c, key);
+}
+
+/** A 0/1 flag carried by a chat object, or undefined when the object says
+ *  nothing about it (same own-property reasoning as muteFromChat: an absent
+ *  field on a history chat reads false through the prototype). */
+function flagFromChat(c: any, key: "pinned" | "archived"): number | undefined {
+  return hasOwn(c, key) ? (c[key] ? 1 : 0) : undefined;
+}
+
 function convertChat(c: any): ChatRow {
   const ts = toTimestamp(c.conversationTimestamp);
   return {
@@ -48,9 +90,9 @@ function convertChat(c: any): ChatRow {
     name: c.name ?? c.subject ?? null,
     last_msg_ts: ts > 0 ? ts : null,  // null = don't overwrite existing timestamp
     unread: c.unreadCount ?? 0,
-    pinned: c.pinned ? 1 : 0,
-    archived: c.archived ? 1 : 0,
-    muted_until: c.muteEndTime ? toTimestamp(c.muteEndTime) : 0,
+    pinned: flagFromChat(c, "pinned"),
+    archived: flagFromChat(c, "archived"),
+    muted_until: muteFromChat(c),
     is_group: c.id?.endsWith?.("@g.us") ? 1 : 0,
     lid_jid: c.lidJid ?? c.accountLid ?? null,
   };
@@ -294,10 +336,7 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
           chatJid !== "status@broadcast"
         ) {
           const chatRow = store.getChat(chatJid);
-          const muted = chatRow?.muted_until
-            ? chatRow.muted_until === -1 || chatRow.muted_until > nowSeconds
-            : false;
-          if (!muted) {
+          if (!isMuted(chatRow?.muted_until, nowSeconds)) {
             const isGroup = chatJid.endsWith("@g.us");
             const chatName = chatRow?.name ?? store.resolveContactName(chatJid);
             const messageText = row.text ?? mediaLabel(row.type) ?? "[message]";
@@ -311,14 +350,9 @@ export function registerHandlers(sock: WASocket, store: StoreQueries, bridge?: R
             let senderName: string | null = null;
             if (isGroup) {
               const participantJid = msg.key.participant;
-              if (participantJid) {
-                const resolved = store.resolveContactName(participantJid);
-                senderName = (resolved && resolved !== participantJid.split("@")[0])
-                  ? resolved
-                  : (msg.pushName ?? resolved);
-              } else {
-                senderName = msg.pushName ?? null;
-              }
+              senderName = participantJid
+                ? resolveSenderName(store, participantJid, msg.pushName)
+                : (msg.pushName ?? null);
               if (senderName && senderName.length > 20) {
                 senderName = senderName.slice(0, 19) + "\u2026";
               }

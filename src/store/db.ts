@@ -8,7 +8,7 @@ export interface DbInstances {
   reader: Database;
 }
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS contacts (
@@ -65,6 +65,11 @@ CREATE TABLE IF NOT EXISTS group_participants (
   user_jid  TEXT NOT NULL,
   role      TEXT,
   PRIMARY KEY (group_jid, user_jid)
+);
+
+CREATE TABLE IF NOT EXISTS app_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -156,6 +161,16 @@ function migrate(writer: Database) {
     // for a message (one-per-message, last-write-wins). Used by both incoming
     // reaction events and the user's own reactions sent via the `e` key.
     try { writer.run(`ALTER TABLE messages ADD COLUMN react_emoji TEXT`); } catch {}
+  }
+
+  if (current < 4) {
+    // v4: chats.muted_until is unix SECONDS (or 0 / -1). Earlier versions
+    // stored WhatsApp's raw millisecond timestamp and then compared it to
+    // seconds, so a timed mute never expired. Rescale anything that can only
+    // be milliseconds. (The app_meta table is created by SCHEMA_SQL.)
+    writer.run(
+      "UPDATE chats SET muted_until = muted_until / 1000 WHERE muted_until > 100000000000"
+    );
   }
 
   if (current < SCHEMA_VERSION) {

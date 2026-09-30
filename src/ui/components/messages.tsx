@@ -4,7 +4,7 @@ import { useTheme } from "../theme.tsx";
 import { MessageBubble, type BubbleProps } from "./message-bubble.tsx";
 import { HIDDEN_MESSAGE_TYPES as HIDDEN_TYPES } from "../image.ts";
 import { mediaLabel } from "../../wa/message-types.ts";
-import { resolveMentionDisplay } from "../../utils/text.ts";
+import { resolveMentionDisplay, resolveSenderName } from "../../utils/text.ts";
 import type { StoreQueries, MessageRow } from "../../store/queries.ts";
 
 interface GroupedMessage {
@@ -77,10 +77,11 @@ export function Messages(props: { queries: StoreQueries; scrollRef?: (el: any) =
         msg.timestamp - prev.timestamp < 300;
       const showSender = !sameSender;
 
-      // Always resolve from contacts first (user's saved name), fall back to push_name
+      // Always resolve from contacts first (user's saved name), fall back to
+      // push_name when contacts only know a bare id or a privacy mask.
       const senderName = msg.from_me
         ? "You"
-        : props.queries.resolveContactName(msg.sender_jid || msg.chat_jid);
+        : resolveSenderName(props.queries, msg.sender_jid || msg.chat_jid, msg.push_name);
 
       // Resolve quoted message preview — text if available, else a media
       // label so image/sticker/video replies still get a "> Photo" indicator.

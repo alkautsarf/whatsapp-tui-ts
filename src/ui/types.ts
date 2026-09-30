@@ -1,4 +1,5 @@
 import type { ChatRow, MessageRow } from "../store/queries.ts";
+import type { MuteOptionValue } from "../utils/mute.ts";
 
 export type AppMode = "normal" | "insert" | "search";
 export type FocusZone = "chat-list" | "messages" | "input";
@@ -25,12 +26,14 @@ export type OverlayType =
   | "info"
   | "forward";
 
-export type ConfirmIntent = "delete-message" | "delete-message-everyone" | "save-media";
+export type ConfirmIntent = "delete-message" | "delete-message-everyone" | "save-media" | "mute-chat";
 
 export type ConfirmOptionValue =
   | "delete-me"
   | "delete-everyone"
   | "save"
+  | MuteOptionValue
+  | "unmute"
   | "cancel";
 
 export interface ConfirmOption {

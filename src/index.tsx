@@ -2,6 +2,7 @@ import { initDb, closeDb } from "./store/db.ts";
 import { initQueries, type StoreQueries } from "./store/queries.ts";
 import { createClient, createClientNonBlocking, type WaClient } from "./wa/client.ts";
 import { registerHandlers } from "./wa/handlers.ts";
+import { backfillMuteStateOnce } from "./wa/mute.ts";
 import { createInterface } from "readline";
 import { existsSync } from "fs";
 import { log, ok, warn, err } from "./utils/log.ts";
@@ -335,6 +336,9 @@ async function runTui() {
       helpers.hydrate();
       // Reconnects build a fresh socket; re-apply focus-based presence.
       publishPresence();
+      // One-time: pull mute state for chats muted on the phone before this
+      // client could record it. No-op once it has succeeded.
+      backfillMuteStateOnce(sock, queries, () => helpers.refreshChats());
     },
     onReconnecting: (attempt) =>
       helpers.setConnection({ status: "reconnecting", reconnectAttempt: attempt }),
