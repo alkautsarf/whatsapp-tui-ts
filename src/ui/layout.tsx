@@ -18,7 +18,7 @@ import { ConfirmModal } from "./overlays/confirm.tsx";
 import { ForwardOverlay } from "./overlays/forward.tsx";
 import { InfoOverlay } from "./overlays/info.tsx";
 import { log } from "../utils/log.ts";
-import { getRawMessage, downloadAndCache } from "../wa/media.ts";
+import { getRawMessage, downloadAndCache, knownFileExt, mimetypeForFile } from "../wa/media.ts";
 import { parsePlaceholders, clearPending, type PendingAttachment } from "../utils/attachment-registry.ts";
 import { finalizeMentions, clearMentions } from "../utils/mention-registry.ts";
 import { MUTE_NONE, describeMute, muteUntilForOption } from "../utils/mute.ts";
@@ -28,6 +28,12 @@ import type { WASocket, WAMessageKey } from "@whiskeysockets/baileys";
 import type { InputMethods } from "./types.ts";
 
 type MediaType = "image" | "video" | "audio" | "document" | "sticker";
+
+// Stored message type -> how a forward re-sends it.
+const FORWARD_TYPE: Record<string, MediaType> = {
+  imageMessage: "image", videoMessage: "video", audioMessage: "audio",
+  documentMessage: "document", stickerMessage: "sticker",
+};
 
 function mediaTypeFromExt(ext: string): MediaType {
   const e = ext.toLowerCase();
@@ -232,12 +238,25 @@ export function Layout(props: {
     }
   }
 
-  async function sendMedia(sock: WASocket, jid: string, filePath: string, caption?: string, mentionJids: string[] = []) {
-    const fileName = basename(filePath);
+  // `original` carries a forwarded message's own type, file name and
+  // mimetype; without it they are guessed from `filePath`, which for a
+  // forward is a cache file named after the message id.
+  async function sendMedia(
+    sock: WASocket,
+    jid: string,
+    filePath: string,
+    caption?: string,
+    mentionJids: string[] = [],
+    original?: { type?: MediaType; fileName?: string | null; mimetype?: string | null },
+  ) {
+    const fileName = original?.fileName || basename(filePath);
 
     try {
       const ext = filePath.split(".").pop() ?? "";
-      const type = mediaTypeFromExt(ext);
+      const type = original?.type ?? mediaTypeFromExt(ext);
+      // Pass the mimetype explicitly: without one baileys labels a document
+      // application/pdf and audio as Opus.
+      const mimetype = original?.mimetype || mimetypeForFile(filePath);
 
       // Pre-validate file size BEFORE allocating a multi-GB buffer. Without
       // this guard, a 3 GB video would either OOM Bun or crash deep inside
@@ -266,10 +285,10 @@ export function Layout(props: {
           content = { video: buffer, caption };
           break;
         case "audio":
-          content = { audio: buffer, ptt: false };
+          content = { audio: buffer, ptt: false, mimetype };
           break;
         case "document":
-          content = { document: buffer, fileName, caption };
+          content = { document: buffer, fileName, caption, mimetype };
           break;
       }
       // Carry through any mention JIDs from a caption that referenced
@@ -642,7 +661,15 @@ export function Layout(props: {
                 // a misleading success toast onto the screen. sendMedia
                 // owns its own per-failure toast.
                 const caption = dbMsg.text ?? undefined;
-                await sendMedia(sock, targetJid, path, caption);
+                // Keep the source's type, name and mimetype rather than
+                // re-guessing from the cache file. A real file-name extension
+                // beats the stored mimetype, which old builds set to
+                // application/pdf for every document they sent.
+                await sendMedia(sock, targetJid, path, caption, [], {
+                  type: FORWARD_TYPE[dbMsg.media_type ?? ""],
+                  fileName: dbMsg.file_name,
+                  mimetype: knownFileExt(dbMsg.file_name) ? mimetypeForFile(dbMsg.file_name!) : dbMsg.mimetype,
+                });
                 helpers.showToast(`Forwarded to ${targetName}`, "info", 2500);
               })();
               return;

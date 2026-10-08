@@ -1,5 +1,6 @@
 import { downloadMediaMessage, downloadContentFromMessage, type WAMessage, type WASocket, type MediaType } from "@whiskeysockets/baileys";
 import { mkdirSync, existsSync, writeFileSync } from "fs";
+import { extname } from "path";
 import { log, warn } from "../utils/log.ts";
 import { MEDIA_DIR } from "../utils/paths.ts";
 import type { MessageRow } from "../store/queries.ts";
@@ -18,11 +19,41 @@ function extFromMimetype(mime?: string | null): string {
     "image/gif": "gif", "video/mp4": "mp4", "audio/ogg": "ogg",
     "audio/mpeg": "mp3", "application/pdf": "pdf",
   };
-  return map[mime] ?? mime.split("/")[1] ?? "bin";
+  // The subtype comes from the sender and ends up in a file name handed to a
+  // viewer, so keep only plain characters ("vnd.ms-excel", "gpx+xml").
+  const sub = mime.split(";")[0]!.split("/")[1]?.trim();
+  return map[mime] ?? (sub && /^[a-z0-9.+-]{1,80}$/i.test(sub) ? sub : "bin");
 }
 
-export function mediaCachePath(msgId: string, mime?: string | null): string {
-  return `${MEDIA_DIR}/${msgId}.${extFromMimetype(mime)}`;
+// Mimetype Bun knows for an extension, or "" when it doesn't. Bun's lookup is
+// case-sensitive ("a.PDF" comes back octet-stream), so lowercase first, and
+// drop parameters like ";charset=utf-8" to match what phones send.
+function typeForExt(ext: string): string {
+  const type = Bun.file(`f.${ext.toLowerCase()}`).type.split(";")[0]!;
+  return type === "application/octet-stream" ? "" : type;
+}
+
+// A document's file-name extension, only when it is a real one. "Contract
+// v1.2" or "Invoice No.123" end in a dotted number, not an extension (Bun
+// even maps ".123" to Lotus 1-2-3), so the caller falls back to the message's
+// mimetype for those. Real extensions carry a letter: pdf, xlsx, mp3, 7z.
+export function knownFileExt(fileName?: string | null): string | undefined {
+  const ext = fileName?.match(/\.([a-z0-9]{1,8})$/i)?.[1]?.toLowerCase();
+  return ext && /[a-z]/.test(ext) && typeForExt(ext) ? ext : undefined;
+}
+
+// Mimetype for an outgoing document or audio file. Baileys labels one sent
+// without a mimetype application/pdf (audio: Opus), so recipients saw every
+// .csv/.xlsx/.md as a PDF.
+export function mimetypeForFile(filePath: string): string {
+  return typeForExt(extname(filePath).slice(1)) || "application/octet-stream";
+}
+
+// Documents keep their own extension: the mimetype can lie (wa-tui builds
+// before the send fix labeled every outgoing document application/pdf), and
+// the system viewer picks an app from the cached file's extension.
+export function mediaCachePath(msgId: string, mime?: string | null, fileName?: string | null): string {
+  return `${MEDIA_DIR}/${msgId}.${knownFileExt(fileName) ?? extFromMimetype(mime)}`;
 }
 
 // LRU cache for raw WAMessage objects (needed for downloadMediaMessage)
@@ -60,7 +91,7 @@ export async function downloadAndCache(
   store?: { updateMediaPath(id: string, path: string): void },
 ): Promise<string | null> {
   ensureMediaDir();
-  const path = mediaCachePath(row.id, row.mimetype);
+  const path = mediaCachePath(row.id, row.mimetype, row.file_name);
 
   if (existsSync(path)) return path;
 

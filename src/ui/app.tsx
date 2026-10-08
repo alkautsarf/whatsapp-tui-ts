@@ -6,10 +6,10 @@ import { useAppKeyboard } from "./keys.ts";
 import { Layout } from "./layout.tsx";
 import { QROverlay } from "./overlays/qr-code.tsx";
 import { encodeForInline, transmitImages, clearAllImages, showFullView, IMAGE_MEDIA_TYPES, isInTmux, kittyWrite, type EncodedImage } from "./image.ts";
-import { downloadAndCache, isDownloadable } from "../wa/media.ts";
+import { downloadAndCache, isDownloadable, knownFileExt, mediaCachePath } from "../wa/media.ts";
 import { log } from "../utils/log.ts";
-import { execSync } from "child_process";
-import { writeFileSync, readFileSync, unlinkSync } from "fs";
+import { execSync, execFileSync } from "child_process";
+import { writeFileSync, readFileSync, unlinkSync, existsSync, renameSync } from "fs";
 import { resolveMentionDisplay, truncate } from "../utils/text.ts";
 import type { StoreQueries } from "../store/queries.ts";
 import type { WASocket } from "@whiskeysockets/baileys";
@@ -157,6 +157,21 @@ export function App(props: {
 
     // Try to get local path first, then download
     let path = msg.media_path;
+    // A document cached by a build that trusted a mislabeled mimetype sits
+    // under the wrong name (a spreadsheet as <id>.pdf). Move it to its real
+    // name so the system viewer picks the right app.
+    if (path && msg.file_name) {
+      const canonical = mediaCachePath(msg.id, msg.mimetype, msg.file_name);
+      if (path !== canonical && existsSync(path) && !existsSync(canonical)) {
+        try {
+          renameSync(path, canonical);
+          props.queries.updateMediaPath(msg.id, canonical);
+          path = canonical;
+        } catch (e) {
+          log("media", `Could not rename cached ${path}: ${(e as Error)?.message}`);
+        }
+      }
+    }
     if (!path) {
       const sock = props.getSock();
       if (sock) path = await downloadAndCache(sock, msg, props.queries);
@@ -240,12 +255,11 @@ export function App(props: {
       return;
     }
 
-    // Detect PDF by mimetype or extension. mimetype comes from baileys'
-    // documentMessage payload. Extension is a fallback for older messages
-    // that may have null mimetype.
-    const isPdf =
-      msg.mimetype === "application/pdf" ||
-      path.toLowerCase().endsWith(".pdf");
+    // Trust the document's own extension when it is a real one: wa-tui builds
+    // before the send fix labeled every outgoing document application/pdf.
+    // Otherwise ("Contract v1.2", no file name) the mimetype decides.
+    const nameExt = knownFileExt(msg.file_name);
+    const isPdf = nameExt ? nameExt === "pdf" : msg.mimetype === "application/pdf";
 
     if (isPdf) {
       // Render with phosphor — interactive page navigation built in.
@@ -259,7 +273,8 @@ export function App(props: {
       process.stdin.resume();
 
       try {
-        execSync(`phosphor "${path.replace(/"/g, '\\"')}"`, {
+        // No shell: the path carries sender-controlled parts (message id).
+        execFileSync("phosphor", [path], {
           stdio: "inherit",
           env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}` },
         });

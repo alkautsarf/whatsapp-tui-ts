@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.1] - 2026-10-08
+
+### Fixed
+
+- **Every document wa-tui sent arrived as a PDF.** `sendMedia` passed no mimetype, and Baileys fills a missing document mimetype with `application/pdf`, so a `.csv`, `.xlsx`, `.md`, `.gpx` or `.zip` showed up on the other phone as a PDF that would not open. Documents now carry the type for their extension (`mimetypeForFile` in `src/wa/media.ts`, case-insensitive, `application/octet-stream` when the extension is unknown). Audio had the same gap (Baileys labels it Opus) and now carries its real type too.
+- **Opening a document picked the viewer from a mimetype that could be wrong.** The PDF check and the media cache file name now trust the document's own file-name extension when it is a real one (`knownFileExt`), and fall back to the mimetype for names like "Contract v1.2". A document an older build cached under a wrong `.pdf` name is renamed to its real name when opened.
+- **Forwarding an older media message re-guessed its type from the cache file.** The forward now keeps the source message's type, file name and mimetype, so a large forwarded document can no longer turn into a video that trips the 16 MB limit, and the recipient sees the original file name instead of the message id.
+
+### Security
+
+- The PDF viewer (`phosphor`) is launched without a shell, and the cache-file extension taken from a sender's mimetype is limited to plain characters. A crafted mimetype could previously reach a shell command when the document was opened.
+
 ## [0.7.0] - 2026-09-30
 
 ### Added
@@ -467,6 +479,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.7.1]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.7.1
 [0.7.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.7.0
 [0.6.1]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.6.1
 [0.6.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.6.0
