@@ -67,6 +67,7 @@ This is a TypeScript rewrite of the original [Rust whatsapp-tui](https://github.
 - `Ctrl+P` → "Resync mute settings from phone" re-reads every chat's mute state if the two ever drift
 
 **Reliability**
+- Phone notifications keep working while wa-tui is open: presence follows terminal focus, and on macOS it also goes "away" after 3 minutes without keyboard or mouse input, so a locked or sleeping-display Mac no longer silences your phone
 - History sync from baileys (bootstrap and recent history on link), persisted to local SQLite (WAL mode)
 - Socket liveness check forces reconnect if WhatsApp stops sending frames (zombie socket recovery)
 - Background daemon can fire native notifications even when wa-tui is in another tmux session

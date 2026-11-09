@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.2] - 2026-11-09
+
+### Fixed
+
+- **Phone notifications stopped while the Mac was awake but unattended.** wa-tui sets WhatsApp presence from terminal focus, and WhatsApp withholds phone push while a linked device is "available". Display sleep and screen lock deliver no focus-out event, so with the wa-tui pane focused the phone stayed silent until someone touched the Mac. A macOS idle safety net (`src/utils/terminal-focus.ts`) now reads the HID idle time every 15 s, forces presence to "unavailable" after 3 minutes without keyboard or mouse input, and restores it when input resumes, but only if idle was the sole reason and, under tmux, the pane is still the attended one. A real focus-out while idle cancels the restore. Trade-off: reading a chat for 3+ minutes without touching anything also counts as away.
+
+### Changed
+
+- The tmux attended check and the idle check share one bounded-subprocess helper (`runBounded`), and the idle query uses its own timeout and a narrowed `ioreg -r -k HIDIdleTime` call.
+
 ## [0.7.1] - 2026-10-08
 
 ### Fixed
@@ -479,6 +489,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Verification REPL with commands: chats, msgs, contacts, groups, send, stats, sql
 - Test harness (`test.ts`) for standalone Baileys protocol validation
 
+[0.7.2]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.7.2
 [0.7.1]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.7.1
 [0.7.0]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.7.0
 [0.6.1]: https://github.com/alkautsarf/whatsapp-tui-ts/releases/tag/v0.6.1

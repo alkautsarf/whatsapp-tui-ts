@@ -38,6 +38,10 @@ const FOCUS_OUT = Buffer.from([0x1b, 0x5b, 0x4f]); // ESC [ O
 // every notification for a backgrounded session.
 let focused = false;
 let installed = false;
+// True while `focused` is OFF only because the Mac went idle (see the idle
+// safety net below), so returning to the keyboard can restore it without
+// waiting for a FOCUS_IN that will never come.
+let idleForced = false;
 
 type FocusListener = (focused: boolean) => void;
 const listeners = new Set<FocusListener>();
@@ -46,13 +50,23 @@ export function isTerminalFocused(): boolean {
   return focused;
 }
 
-function setFocused(next: boolean): void {
+// `idle` marks an OFF caused by the idle poller, so the flag and the state
+// change together and no caller has to re-set it afterwards.
+function setFocused(next: boolean, opts: { idle?: boolean } = {}): void {
+  idleForced = !next && opts.idle === true;
   if (focused === next) return;
   focused = next;
   for (const cb of listeners) {
     try { cb(next); } catch {}
   }
 }
+
+// Test-only access to the focus state machine. Not used by the app.
+export const __focusStateForTest = {
+  set: setFocused,
+  get: () => ({ focused, idleForced }),
+  reset: () => { focused = false; idleForced = false; },
+};
 
 // Subscribe to focus changes. The callback fires with the current state on
 // subscribe (via queueMicrotask), then on every subsequent focus flip.
@@ -75,17 +89,21 @@ export function installFocusTracking(): void {
   // listener does NOT swallow the bytes: they continue to whatever else
   // is reading stdin (which ignores them as no-op CSI).
   process.stdin.on("data", (chunk: Buffer) => {
+    // setFocused also clears `idleForced` even when the state does not flip,
+    // so a real FOCUS_OUT while idle-forced OFF cancels the pending restore.
     if (chunk.includes(FOCUS_IN)) setFocused(true);
     if (chunk.includes(FOCUS_OUT)) setFocused(false);
   });
 
   startTmuxWatch();
+  startIdleWatch();
 }
 
 export function uninstallFocusTracking(): void {
   if (!installed) return;
   installed = false;
   stopTmuxWatch();
+  stopIdleWatch();
   try { process.stdout.write(DISABLE_FOCUS_REPORTING); } catch {}
 }
 
@@ -147,16 +165,12 @@ export function focusOverrideFromPoll(attended: boolean | null): false | null {
 // Async, timeout-bounded tmux query. Never blocks the render/stdin thread
 // (spawnSync would), and a stuck tmux server is killed after
 // TMUX_QUERY_TIMEOUT_MS instead of freezing the TUI indefinitely.
-async function tmuxPaneAttended(pane: string): Promise<boolean | null> {
+// Run a short command with a hard kill deadline and return its stdout, or
+// null on non-zero exit, spawn failure, or timeout.
+async function runBounded(argv: string[], timeoutMs: number): Promise<string | null> {
   try {
-    const proc = Bun.spawn(
-      [
-        "tmux", "display-message", "-p", "-t", pane, "-F",
-        "#{session_attached}:#{window_active}:#{pane_active}",
-      ],
-      { stdout: "pipe", stderr: "ignore" },
-    );
-    const killer = setTimeout(() => { try { proc.kill(); } catch {} }, TMUX_QUERY_TIMEOUT_MS);
+    const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "ignore" });
+    const killer = setTimeout(() => { try { proc.kill(); } catch {} }, timeoutMs);
     let out = "";
     try {
       out = await new Response(proc.stdout).text();
@@ -164,11 +178,22 @@ async function tmuxPaneAttended(pane: string): Promise<boolean | null> {
     } finally {
       clearTimeout(killer);
     }
-    if (proc.exitCode !== 0) return null;
-    return parseTmuxAttended(out);
+    return proc.exitCode === 0 ? out : null;
   } catch {
-    return null; // tmux missing / server gone / killed: don't touch focus state
+    return null;
   }
+}
+
+async function tmuxPaneAttended(pane: string): Promise<boolean | null> {
+  const out = await runBounded(
+    [
+      "tmux", "display-message", "-p", "-t", pane, "-F",
+      "#{session_attached}:#{window_active}:#{pane_active}",
+    ],
+    TMUX_QUERY_TIMEOUT_MS,
+  );
+  // tmux missing / server gone / killed: don't touch focus state
+  return out === null ? null : parseTmuxAttended(out);
 }
 
 function startTmuxWatch(): void {
@@ -194,5 +219,91 @@ function stopTmuxWatch(): void {
   if (tmuxPoll) {
     clearInterval(tmuxPoll);
     tmuxPoll = null;
+  }
+}
+
+// ---- macOS idle safety net -----------------------------------------
+//
+// The second way `focused` gets stuck true: the wa-tui pane is the focused
+// pane and the user walks away. Display sleep and screen lock deliver no
+// FOCUS_OUT, so presence stays "available" and WhatsApp keeps suppressing
+// phone push while nobody is at the Mac (2026-11-09 incident). A full system
+// sleep drops the socket, so it was only the awake-but-away case that broke.
+//
+// Fix: poll the HID idle time (keyboard/mouse inactivity, which also covers
+// display-off and lock). Past IDLE_THRESHOLD_MS, force focus OFF and remember
+// it was idle that did it. When input resumes, restore focus ON, but only if
+// idle was the sole reason (any real focus event clears `idleForced`) and,
+// under tmux, the pane is still the attended one. macOS only; no-op elsewhere.
+
+const IDLE_THRESHOLD_MS = 3 * 60_000;
+const IDLE_POLL_INTERVAL_MS = 15_000;
+const IDLE_QUERY_TIMEOUT_MS = 2000;
+let idlePoll: ReturnType<typeof setInterval> | null = null;
+let idleQueryInFlight = false;
+
+// Parse `HIDIdleTime` (nanoseconds) out of `ioreg -c IOHIDSystem` output.
+// Returns milliseconds, or null when the field is missing or unparsable.
+export function parseHidIdleMs(out: string): number | null {
+  const m = out.match(/"HIDIdleTime"\s*=\s*(\d+)/);
+  if (!m) return null;
+  const ns = Number(m[1]);
+  return Number.isFinite(ns) ? Math.floor(ns / 1_000_000) : null;
+}
+
+// The idle poller's decision as a pure function. `false` = force focus OFF
+// (went idle while focused), `true` = restore focus ON (input resumed after an
+// idle-forced OFF), `null` = leave state alone. It can only return `true`
+// when the OFF was idle-forced, so it never overrides a real FOCUS_OUT.
+export function focusOverrideFromIdle(
+  idleMs: number | null,
+  state: { focused: boolean; idleForced: boolean },
+  thresholdMs = IDLE_THRESHOLD_MS,
+): boolean | null {
+  if (idleMs === null) return null;
+  if (state.focused && idleMs >= thresholdMs) return false;
+  if (!state.focused && state.idleForced && idleMs < thresholdMs) return true;
+  return null;
+}
+
+async function hidIdleMs(): Promise<number | null> {
+  // -r -k limits the dump to the IOHIDSystem entry that carries the key.
+  const out = await runBounded(
+    ["ioreg", "-c", "IOHIDSystem", "-r", "-k", "HIDIdleTime", "-d", "1"],
+    IDLE_QUERY_TIMEOUT_MS,
+  );
+  return out === null ? null : parseHidIdleMs(out);
+}
+
+function startIdleWatch(): void {
+  if (process.platform !== "darwin") return;
+  idlePoll = setInterval(() => {
+    // Only two states need a check: focused (could go idle) and idle-forced
+    // OFF (could come back). A real unfocus needs nothing from us.
+    if (!(focused || idleForced) || idleQueryInFlight) return;
+    idleQueryInFlight = true;
+    (async () => {
+      const decision = focusOverrideFromIdle(await hidIdleMs(), { focused, idleForced });
+      if (decision === false) {
+        setFocused(false, { idle: true });
+      } else if (decision === true) {
+        const pane = process.env.TMUX_PANE;
+        if (process.env.TMUX && pane && (await tmuxPaneAttended(pane)) !== true) {
+          idleForced = false; // user came back to a different pane: stay OFF
+          return;
+        }
+        setFocused(true);
+      }
+    })()
+      .catch(() => {})
+      .finally(() => { idleQueryInFlight = false; });
+  }, IDLE_POLL_INTERVAL_MS);
+  (idlePoll as { unref?: () => void }).unref?.();
+}
+
+function stopIdleWatch(): void {
+  if (idlePoll) {
+    clearInterval(idlePoll);
+    idlePoll = null;
   }
 }

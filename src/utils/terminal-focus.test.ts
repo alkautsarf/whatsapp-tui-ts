@@ -1,5 +1,11 @@
 import { expect, test, describe } from "bun:test";
-import { parseTmuxAttended, focusOverrideFromPoll } from "./terminal-focus.ts";
+import {
+  parseTmuxAttended,
+  focusOverrideFromPoll,
+  parseHidIdleMs,
+  focusOverrideFromIdle,
+  __focusStateForTest as fsm,
+} from "./terminal-focus.ts";
 
 describe("parseTmuxAttended", () => {
   test("attended: attached client, active window, active pane", () => {
@@ -55,5 +61,83 @@ describe("focusOverrideFromPoll (OFF-only invariant)", () => {
       expect(out === false || out === null).toBe(true);
       expect(out).not.toBe(true);
     }
+  });
+});
+
+describe("parseHidIdleMs", () => {
+  test("reads HIDIdleTime nanoseconds as milliseconds", () => {
+    expect(parseHidIdleMs('    | |     "HIDIdleTime" = 60483583\n')).toBe(60);
+    expect(parseHidIdleMs('"HIDIdleTime" = 240000000000')).toBe(240_000);
+  });
+
+  test("missing field -> null", () => {
+    expect(parseHidIdleMs("")).toBeNull();
+    expect(parseHidIdleMs('"HIDIdleTimeX" = garbage')).toBeNull();
+  });
+});
+
+describe("focusOverrideFromIdle", () => {
+  const T = 180_000;
+
+  test("focused and idle past threshold -> force OFF (the 2026-11-09 bug)", () => {
+    expect(focusOverrideFromIdle(T, { focused: true, idleForced: false }, T)).toBe(false);
+  });
+
+  test("focused and active -> leave alone", () => {
+    expect(focusOverrideFromIdle(5_000, { focused: true, idleForced: false }, T)).toBeNull();
+  });
+
+  test("idle-forced OFF and input resumed -> restore ON", () => {
+    expect(focusOverrideFromIdle(1_000, { focused: false, idleForced: true }, T)).toBe(true);
+  });
+
+  test("idle-forced OFF and still idle -> leave alone", () => {
+    expect(focusOverrideFromIdle(T * 2, { focused: false, idleForced: true }, T)).toBeNull();
+  });
+
+  test("a REAL unfocus is never overridden back ON", () => {
+    expect(focusOverrideFromIdle(0, { focused: false, idleForced: false }, T)).toBeNull();
+  });
+
+  test("unreadable idle time -> leave alone", () => {
+    expect(focusOverrideFromIdle(null, { focused: true, idleForced: false }, T)).toBeNull();
+    expect(focusOverrideFromIdle(null, { focused: false, idleForced: true }, T)).toBeNull();
+  });
+});
+
+describe("focus state machine (idle-forced flag)", () => {
+  const T = 180_000;
+
+  test("idle OFF then a real FOCUS_OUT cancels the restore (review finding #1)", () => {
+    fsm.reset();
+    fsm.set(true);
+    fsm.set(false, { idle: true });
+    expect(fsm.get()).toEqual({ focused: false, idleForced: true });
+    fsm.set(false); // ESC [ O arrives while already OFF
+    expect(fsm.get()).toEqual({ focused: false, idleForced: false });
+    // The next idle poll after input resumes must NOT turn focus back on.
+    expect(focusOverrideFromIdle(1_000, fsm.get(), T)).toBeNull();
+  });
+
+  test("idle OFF then FOCUS_IN restores and clears the flag", () => {
+    fsm.reset();
+    fsm.set(true);
+    fsm.set(false, { idle: true });
+    fsm.set(true);
+    expect(fsm.get()).toEqual({ focused: true, idleForced: false });
+  });
+
+  test("idle OFF then input resumes -> poller restores ON", () => {
+    fsm.reset();
+    fsm.set(true);
+    fsm.set(false, { idle: true });
+    expect(focusOverrideFromIdle(1_000, fsm.get(), T)).toBe(true);
+  });
+
+  test("a non-idle OFF never sets the flag", () => {
+    fsm.reset();
+    fsm.set(true);
+    fsm.set(false);
+    expect(fsm.get().idleForced).toBe(false);
   });
 });
